@@ -1,0 +1,35 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.ipynb_checkpoints/
+
+# --- Heavy data / results / assets (do NOT track) ---
+data/
+result/
+tiles_dataset/
+api/model/weights/
+logs/
+
+# --- Model checkpoints & large binaries ---
+*.pth
+*.pt
+*.ckpt
+*.safetensors
+*.bin
+*.rar
+*.npy
+*.npz
+*.tar
+*.tar.gz
+*.zip
+
+# --- Local / editor / agent config ---
+.claude/
+.vscode/
+*.log
+
+# --- OS ---
+.DS_Store
+Thumbs.db

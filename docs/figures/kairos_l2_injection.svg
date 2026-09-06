@@ -1,0 +1,96 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 540" font-family="Arial, Helvetica, sans-serif">
+  <defs>
+    <marker id="arr-inj" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#455A64"/>
+    </marker>
+  </defs>
+
+  <style>
+    .hs     { fill:#F3E5F5; stroke:#7B1FA2; stroke-width:1.6; }
+    .ca-ts  { fill:#E3F2FD; stroke:#1976D2; stroke-width:1.4; }
+    .ca-poi { fill:#E8F5E9; stroke:#2E7D32; stroke-width:1.4; }
+    .ca-sat { fill:#FFF3E0; stroke:#EF6C00; stroke-width:1.4; }
+    .gate   { fill:#FFF8E1; stroke:#F9A825; stroke-width:1.3; }
+    .out    { fill:#ECEFF1; stroke:#607D8B; stroke-width:1.4; }
+    .edge   { stroke:#455A64; stroke-width:1.4; fill:none; }
+    .res    { stroke:#90A4AE; stroke-width:1.3; fill:none; stroke-dasharray:5 4; }
+    .lbl    { fill:#37474F; font-size:12px; }
+    .lbl-b  { fill:#263238; font-size:13px; font-weight:bold; }
+    .sub    { fill:#546E7A; font-size:10.5px; }
+    .dim    { fill:#7B1FA2; font-size:10.5px; font-style:italic; }
+  </style>
+
+  <text class="lbl-b" x="30" y="30" font-size="15">单层注入细节 —— decoder 第 l 层（三路 cross-attention · 各自 gate）</text>
+
+  <!-- h_base (query) -->
+  <rect class="hs" x="30" y="218" width="130" height="52" rx="8"/>
+  <text class="lbl-b" x="95" y="240" text-anchor="middle">h_base</text>
+  <text class="dim" x="95" y="258" text-anchor="middle">隐状态（query）</text>
+
+  <!-- cross-attn columns -->
+  <rect class="ca-ts" x="210" y="100" width="170" height="48" rx="8"/>
+  <text class="lbl-b" x="295" y="120" text-anchor="middle" fill="#1565C0">CrossAttn_ts</text>
+  <text class="sub" x="295" y="138" text-anchor="middle">Q=h_base · KV=时序 states</text>
+
+  <rect class="ca-poi" x="210" y="218" width="170" height="48" rx="8"/>
+  <text class="lbl-b" x="295" y="238" text-anchor="middle" fill="#1B5E20">CrossAttn_poi</text>
+  <text class="sub" x="295" y="256" text-anchor="middle">Q=h_base · KV=POI tokens</text>
+
+  <rect class="ca-sat" x="210" y="336" width="170" height="48" rx="8"/>
+  <text class="lbl-b" x="295" y="356" text-anchor="middle" fill="#E65100">CrossAttn_sat</text>
+  <text class="sub" x="295" y="374" text-anchor="middle">Q=h_base · KV=卫星 tokens</text>
+
+  <!-- gates -->
+  <rect class="gate" x="420" y="100" width="90" height="48" rx="8"/>
+  <text class="lbl-b" x="465" y="120" text-anchor="middle">&#215; 1</text>
+  <text class="sub" x="465" y="138" text-anchor="middle">原生 · 冻结</text>
+
+  <rect class="gate" x="420" y="218" width="90" height="48" rx="8"/>
+  <text class="lbl-b" x="465" y="238" text-anchor="middle">&#215; gate_poi</text>
+  <text class="sub" x="465" y="256" text-anchor="middle">标量 · 初始 0</text>
+
+  <rect class="gate" x="420" y="336" width="90" height="48" rx="8"/>
+  <text class="lbl-b" x="465" y="356" text-anchor="middle">&#215; gate_sat</text>
+  <text class="sub" x="465" y="374" text-anchor="middle">标量 · 初始 0</text>
+
+  <!-- sum node -->
+  <circle class="hs" cx="560" cy="242" r="22"/>
+  <text class="lbl-b" x="560" y="249" text-anchor="middle" fill="#7B1FA2">+</text>
+
+  <!-- FFN + output -->
+  <rect class="out" x="620" y="216" width="140" height="52" rx="8"/>
+  <text class="lbl-b" x="690" y="240" text-anchor="middle">Feed-Forward</text>
+  <text class="sub" x="690" y="258" text-anchor="middle">FFN</text>
+
+  <rect class="hs" x="800" y="216" width="160" height="52" rx="8"/>
+  <text class="lbl-b" x="880" y="240" text-anchor="middle">h_out</text>
+  <text class="sub" x="880" y="258" text-anchor="middle">下一层 / 输出</text>
+
+  <!-- fan-out from h_base -->
+  <line class="edge" x1="160" y1="244" x2="210" y2="124" marker-end="url(#arr-inj)"/>
+  <line class="edge" x1="160" y1="244" x2="210" y2="242" marker-end="url(#arr-inj)"/>
+  <line class="edge" x1="160" y1="244" x2="210" y2="360" marker-end="url(#arr-inj)"/>
+
+  <!-- cross-attn -> gate -->
+  <line class="edge" x1="380" y1="124" x2="420" y2="124" marker-end="url(#arr-inj)"/>
+  <line class="edge" x1="380" y1="242" x2="420" y2="242" marker-end="url(#arr-inj)"/>
+  <line class="edge" x1="380" y1="360" x2="420" y2="360" marker-end="url(#arr-inj)"/>
+
+  <!-- gate -> sum -->
+  <line class="edge" x1="510" y1="124" x2="538" y2="242" marker-end="url(#arr-inj)"/>
+  <line class="edge" x1="510" y1="242" x2="538" y2="242" marker-end="url(#arr-inj)"/>
+  <line class="edge" x1="510" y1="360" x2="538" y2="242" marker-end="url(#arr-inj)"/>
+
+  <!-- sum -> FFN -> output -->
+  <line class="edge" x1="582" y1="242" x2="620" y2="242" marker-end="url(#arr-inj)"/>
+  <line class="edge" x1="760" y1="242" x2="800" y2="242" marker-end="url(#arr-inj)"/>
+
+  <!-- residual h_base -> sum -->
+  <polyline class="res" points="95,270 95,430 560,430 560,264" marker-end="url(#arr-inj)"/>
+  <text class="sub" x="105" y="424" fill="#78909C">残差 h_base</text>
+
+  <!-- formula -->
+  <rect x="30" y="468" width="930" height="56" rx="8" fill="#F5F5F5" stroke="#9E9E9E"/>
+  <text class="lbl-b" x="50" y="490">h_i = h_base + &#931;_i gate_i &#183; CrossAttn_i(h_base, aux_i)，   i &#8712; {时序, POI, 卫星}</text>
+  <text class="sub" x="50" y="510">gate_poi/gate_sat 标量初始 0（可证伪）、gate_ts ≡ 1（原生冻结）；aux_i：时序=encoder states，POI/卫星=投影 token；本层在 decoder 每层（&#215;4）重复。</text>
+</svg>
