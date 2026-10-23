@@ -25,6 +25,10 @@ if os.path.exists(utils_py_path):
     EV_VLM_Dataset = utils_legacy.EV_VLM_Dataset
     ASTGCNDataset = utils_legacy.ASTGCNDataset
     create_rnn_data = utils_legacy.create_rnn_data
+    split_window_starts = utils_legacy.split_window_starts
+    usable_run_length = utils_legacy.usable_run_length
+    straight_stretch_hours = utils_legacy.straight_stretch_hours
+    straight_window_keep = utils_legacy.straight_window_keep
     calculate_regression_metrics = utils_legacy.calculate_regression_metrics
     convert_numpy = utils_legacy.convert_numpy
     get_data_paths = utils_legacy.get_data_paths
@@ -43,6 +47,10 @@ __all__ = [
     'EV_VLM_Dataset',
     'ASTGCNDataset',
     'create_rnn_data',
+    'split_window_starts',
+    'usable_run_length',
+    'straight_stretch_hours',
+    'straight_window_keep',
     'calculate_regression_metrics',
     'convert_numpy',
     'get_data_paths',

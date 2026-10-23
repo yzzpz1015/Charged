@@ -25,18 +25,24 @@ parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 if parent_dir not in sys.path:
     sys.path.append(parent_dir)
 
-from api.dataset.common import EVDataset
+from api.dataset.common import (EVDataset, SPLIT_TRAIN,
+                                SPLIT_VALID, SPLIT_TEST)
 
 
-def build_samples(raw, start, end, seq_l, pre_len):
-    """Identical to train_kairos_l1.build_samples.  Row r = window (r//N), site (r%N)."""
-    num_windows = end - start - seq_l - pre_len
-    assert num_windows > 0
+def build_samples(raw, starts, seq_l, pre_len):
+    """按**窗口起点数组**建样本（起点来自 EVDataset.window_starts，新划分的唯一取窗入口）。
+
+    旧版按连续区间 ``end - start - seq_l - pre_len`` 枚举，新口径下是错的（2026-10-04 改）：
+    目标只需落在本段、历史可伸进上一段，所以合法窗口**比连续枚举多**；AMS 段内还夹着
+    停摆行，连续枚举会把跨停摆缺口的窗也当成合法。行 r = 窗口 (r//N)、站 (r%N)。
+    """
+    M = len(starts)
+    assert M > 0
     N = raw.shape[1]
-    X = np.zeros((num_windows, N, seq_l), dtype=np.float32)
-    Y = np.zeros((num_windows, N, pre_len), dtype=np.float32)
-    for i in range(num_windows):
-        base = start + i
+    X = np.zeros((M, N, seq_l), dtype=np.float32)
+    Y = np.zeros((M, N, pre_len), dtype=np.float32)
+    for i, base in enumerate(starts):
+        base = int(base)
         X[i] = raw[base:base + seq_l, :].T
         Y[i] = raw[base + seq_l:base + seq_l + pre_len, :].T
     return X.reshape(-1, seq_l), Y.reshape(-1, pre_len)
@@ -57,6 +63,8 @@ def main():
     ap.add_argument('--fold', type=int, default=6)
     ap.add_argument('--total_fold', type=int, default=6)
     ap.add_argument('--data_path', default='data/')
+    ap.add_argument('--data_suffix', default='_remove_const',
+                        help='城市目录后缀：_remove_const(默认,已剔恒值站) / _remove_zero')
     ap.add_argument('--checkpoint', default='mldi-lab/Kairos_23m')
     ap.add_argument('--kairos_repo', default='/tmp/Kairos_repo')
     ap.add_argument('--top_k', type=int, default=10)
@@ -74,7 +82,7 @@ def main():
     from transformers import AutoModel
 
     device = torch.device(f"cuda:{args.device}" if torch.cuda.is_available() else "cpu")
-    data_dir = f"{args.data_path}{args.city}_remove_zero/"
+    data_dir = f"{args.data_path}{args.city}{args.data_suffix}/"
 
     # --- data + split (identical to L1) ---
     ev = EVDataset(feature='volume', auxiliary='None', data_path=data_dir)
@@ -82,11 +90,11 @@ def main():
                               train_ratio=0.8, valid_ratio=0.1)
     raw = ev.feat  # [T, N]
     N = raw.shape[1]
-    tr_s, tr_e = ev.train_start, ev.train_end
-    te_s, te_e = ev.test_start, ev.test_end
+    st_tr = ev.window_starts(SPLIT_TRAIN, args.seq_l, args.pre_len)
+    st_te = ev.window_starts(SPLIT_TEST, args.seq_l, args.pre_len)
 
-    X_train, Y_train = build_samples(raw, tr_s, tr_e, args.seq_l, args.pre_len)
-    X_test, Y_test = build_samples(raw, te_s, te_e, args.seq_l, args.pre_len)
+    X_train, Y_train = build_samples(raw, st_tr, args.seq_l, args.pre_len)
+    X_test, Y_test = build_samples(raw, st_te, args.seq_l, args.pre_len)
     Mt = len(X_train) // N
     Me = len(X_test) // N
     print(f"[data] N={N} sites, train={len(X_train)} ({Mt} win/site), test={len(X_test)} ({Me} win/site)")

@@ -38,6 +38,7 @@ from api.utils import (
     ASTGCN_RECENT_LEN,
     ASTGCN_DAILY_LEN,
     ASTGCN_DAILY_INTERVAL,
+    split_window_starts,
 )
 from api.utils.spatial import (
     load_distance_matrix,
@@ -45,6 +46,18 @@ from api.utils.spatial import (
     to_torch_tensor,
 )
 
+
+# ---------------------------------------------------------------------------
+# 评测划分口径（2026-10-04 定，与 script/prob_baseline.py 完全一致）
+# ---------------------------------------------------------------------------
+OUTAGE_FRAC = 0.8      # 某小时 >80% 的站同时为零 => 整城停摆（数据中断，非真实空闲）
+TRAIN_FRAC = 2 / 6     # 停摆丢弃后，剩余**可用行**按时间计数切 2/1/3
+VALID_FRAC = 1 / 6
+SPLIT_TRAIN, SPLIT_VALID, SPLIT_TEST = 0, 1, 2
+# 训练期退化站判据，**必须与 script/prob_baseline.py 的 DEGEN_REL/DEGEN_CV 相同**
+# （那边是 live_cols，这边是 split_cross_validation 里的剔站；两处阈值漂了站集就不一样）
+DEGEN_REL = 0.01       # 训练期均值 < 全城活跃站中位数的 1%  => 死站
+DEGEN_CV = 0.01        # 训练期 std / 训练期均值 < 1%        => 常数平台
 
 
 class EVDataset(object):
@@ -137,6 +150,19 @@ class EVDataset(object):
         self.e_price = pd.read_csv(f'{self.data_path}e_price.csv', index_col=0, header=0).values  # Electricity price
         self.s_price = pd.read_csv(f'{self.data_path}s_price.csv', index_col=0, header=0).values  # Service price
         self.time = pd.to_datetime(self.feat.index)  # Convert index to datetime
+
+        # ---- 整城停摆掩码：某小时 >80% 的站同时为零 = 数据中断，不是真实空闲。
+        # 这是**城市的属性，与 self.feature 无关**（volume 还是 duration 都指向同一批
+        # 中断小时），所以始终从 volume.csv 算，不要用 self.feat。见 memory data-ams-outage。
+        _vol = pd.read_csv(f'{self.data_path}volume.csv', header=0, index_col=0)
+        assert len(_vol) == len(self.feat), (
+            f"volume.csv({len(_vol)}) 与 {self.feature}.csv({len(self.feat)}) 行数不一致"
+        )
+        self.outage_row = (_vol.values == 0).mean(axis=1) > 0.8      # [T] bool
+        # 原始 volume 另存一份：剔站判定要用它（见 split_cross_validation），
+        # 与 feature 无关——站是否"活着"是城市的属性。
+        self._vol_raw = _vol.values.astype(np.float64)
+        del _vol
 
         # Normalize price data to [0, 1] range using MinMaxScaler
         price_scaler = MinMaxScaler(feature_range=(0, 1))
@@ -437,7 +463,9 @@ class EVDataset(object):
         if not self.sat_embed_root:
             return None
 
-        city_tag = os.path.basename(os.path.normpath(self.data_path)).replace('_remove_zero', '')
+        city_tag = os.path.basename(os.path.normpath(self.data_path))
+        for _s in ('_remove_const', '_remove_zero'):
+            city_tag = city_tag.replace(_s, '')
         embed_dir = os.path.join(self.sat_embed_root, city_tag, 'embedding', self.sat_embed_zoom)
         embed_path = os.path.join(embed_dir, f'sat_embed_{self.sat_embed_dim}.npy')
         sites_path = os.path.join(embed_dir, f'sat_embed_{self.sat_embed_dim}_sites.csv')
@@ -524,67 +552,103 @@ class EVDataset(object):
             train_ratio: float,
             valid_ratio: float,
     ) -> None:
-        """
-        Split data by month for cross-validation.
+        """按「停摆丢弃 + 剩余可用行计数 2/1/3」划分。**与 ``script/prob_baseline.py`` 同口径。**
 
-        This method implements a time-aware cross-validation strategy where
-        data is split by months to preserve temporal dependencies. Each fold
-        corresponds to a specific month, and within each fold, data is further
-        split into training, validation, and test sets.
+        规则（2026-10-04 定，见 memory data-split-scheme）：
+
+        1. 停摆行（>80% 站同时为零，见 ``self.outage_row``）直接丢弃，**不占额度**；
+        2. 剩余可用行按**时间先后计数**切 train 2 / valid 1 / test 3——不是按日历天，
+           否则 AMS 停摆掉的那几周会白吃 train 的份额；
+        3. 窗口归属只看**目标时刻**落在哪一段，历史只要有效且因果即可伸进上一段
+           （见 :func:`api.utils.split_window_starts`）。
 
         Args:
-            fold (int): Current fold index (1-based).
-            total_fold (int): Total number of folds (should equal number of months).
-            train_ratio (float): Fraction of fold data for training (e.g., 0.7).
-            valid_ratio (float): Fraction of fold data for validation (e.g., 0.2).
+            fold (int): 取前 fold 个月（1-based）。
+            total_fold (int): 总月数，必须等于数据里的月份个数。
+            train_ratio (float): **保留仅为兼容既有调用方，不再生效**。
+            valid_ratio (float): 同上。评测协议固定 2/1/3，不留开关——口径要跨实验可比。
 
         Raises:
-            AssertionError: If time and feature lengths mismatch or train set empty.
+            AssertionError: 时间与特征长度不匹配，或 train 段为空。
         """
         # Validate data consistency
         assert len(self.time) == len(self.feat), "Time and feature lengths must match"
         month_list = sorted(np.unique(self.time.month))  # Get unique months
         assert total_fold == len(month_list), f"Total folds ({total_fold}) must equal number of months ({len(month_list)})"
+        assert hasattr(self, 'outage_row'), "outage_row 未初始化（EVDataset.__init__ 应已算好）"
 
-        # Calculate split points based on month membership
-        fold_time = self.time.month.isin(month_list[0:fold]).sum()  # Count timesteps in current fold
-        train_end = int(fold_time * train_ratio)  # Training set end index
-        valid_start = train_end  # Validation set start index
-        valid_end = int(valid_start + fold_time * valid_ratio)  # Validation set end index
-        test_start = valid_end  # Test set start index
-        test_end = int(fold_time)  # Test set end index
+        T = len(self.time)
+        span = np.asarray(self.time.month.isin(month_list[0:fold]))   # fold 语义保留：取前 fold 个月
+        idx = np.where(span)[0]
+        ok = ~self.outage_row[idx]
+        u = idx[ok]                                              # 该 fold 内的可用行下标（时间序）
+        i1 = int(len(u) * TRAIN_FRAC)
+        i2 = i1 + int(len(u) * VALID_FRAC)
+        u_tr, u_va, u_te = u[:i1], u[i1:i2], u[i2:]
+        assert len(u_tr) > 0, "The training set cannot be empty!"
 
-        # Slice numpy arrays for each split
-        train_feat = self.feat[:train_end]  # Training features
-        valid_feat = self.feat[valid_start:valid_end]  # Validation features
-        test_feat = self.feat[test_start:test_end]  # Test features
+        # ---- 剔站：训练期**退化**的站整列剔除。**与基线 script/prob_baseline.py:live_cols
+        # 同口径同阈值**（改了这边必须改那边，否则站集不同、数字不能放一张表）。
+        #   死站      —— 训练期均值 < 全城活跃站中位数的 DEGEN_REL：归一化分母爆炸；
+        #   常数平台  —— 训练期 std/mean < DEGEN_CV：标准化分母极小，测试期偏差被放大
+        #                上百倍，单站就能劫持验证损失（MEL 站 57 占 82%、JHB 站 22 占 95%）。
+        # 判定**始终用 volume**，与 feature 无关（同 outage_row 的理由）；只用训练段，
+        # 拿 valid/test 筛站就是泄漏。
+        _vol_tr = self._vol_raw[u_tr]
+        _vmean = np.nanmean(_vol_tr, axis=0)
+        _vstd = np.nanstd(_vol_tr, axis=0)
+        _live = np.isfinite(_vmean) & np.isfinite(_vstd) & (_vmean > 0)
+        _med = np.median(_vmean[_live]) if _live.any() else 0.0
+        _live &= (_vmean >= DEGEN_REL * _med) & (_vstd >= DEGEN_CV * np.maximum(_vmean, 1e-12))
+        self.keep_station = _live                                  # [N] bool
+        self.n_station_dropped = int((~self.keep_station).sum())
+        if not self.keep_station.all():
+            self.feat = self.feat[:, self.keep_station]
+            self.feat_columns = [c for c, k in zip(self.feat_columns, self.keep_station) if k]
+            self.lat_long_norm = self.lat_long_norm[self.keep_station]
+            if self.extra_feat is not None:
+                self.extra_feat = self.extra_feat[:, self.keep_station]
 
-        # Apply standard scaling to normalize features
-        self.scaler = StandardScaler()  # Initialize scaler
-        self.train_feat = self.scaler.fit_transform(train_feat)  # Fit and transform training data
-        self.valid_feat = self.scaler.transform(valid_feat)  # Transform validation data
-        self.test_feat = self.scaler.transform(test_feat)  # Transform test data
-        self.scaled_feat = self.scaler.transform(self.feat)  # Keep full continuous history for ASTGCN sampling
+        # 行级归属：-1 不可用（含 fold 之外的行）/ 0 train / 1 valid / 2 test
+        self.split_of_row = np.full(T, -1, dtype=np.int8)
+        self.split_of_row[u_tr] = SPLIT_TRAIN
+        self.split_of_row[u_va] = SPLIT_VALID
+        self.split_of_row[u_te] = SPLIT_TEST
+        # 行可用性：fold 之外的行也算不可用（不作为任何窗口的一部分）
+        self.usable = np.zeros(T, dtype=bool)
+        self.usable[idx] = ok
 
-        # Initialize auxiliary feature splits
+        # 缩放：只用 train 段的**可用行** fit。停摆的 0 值是数据中断而非真实观测，
+        # 算进 mean/std 会同时偏移中心、压低方差（旧实现就是拿含停摆的切片 fit 的）。
+        self.scaler = StandardScaler()
+        self.train_feat = self.scaler.fit_transform(self.feat[u_tr])
+        self.valid_feat = self.scaler.transform(self.feat[u_va])
+        self.test_feat = self.scaler.transform(self.feat[u_te])
+        # 全量（含停摆行）：NN 路径按 starts 取窗，标签切片要用绝对下标
+        self.scaled_feat = self.scaler.transform(self.feat)
+
+        # 辅助特征：同样按可用行切。NN 路径用的是**全量** self.extra_feat + 同一组 starts。
         self.train_extra_feat, self.valid_extra_feat, self.test_extra_feat = None, None, None
-        
-        # Split auxiliary features if present
         if self.extra_feat is not None:
-            self.train_extra_feat = self.extra_feat[:train_end]  # Training auxiliary features
-            self.valid_extra_feat = self.extra_feat[valid_start:valid_end]  # Validation auxiliary features
-            self.test_extra_feat = self.extra_feat[test_start:test_end]  # Test auxiliary features
+            self.train_extra_feat = self.extra_feat[u_tr]
+            self.valid_extra_feat = self.extra_feat[u_va]
+            self.test_extra_feat = self.extra_feat[u_te]
 
-        # Store split boundaries for models that need full-series context.
-        self.train_start = 0
-        self.train_end = train_end
-        self.valid_start = valid_start
-        self.valid_end = valid_end
-        self.test_start = test_start
-        self.test_end = test_end
+        # 各段可用行的**全局下标区间** [start, end)，供 ASTGCNDataset 与外部脚本读取。
+        # 注意：区间内并非每行都可用——AMS 的 train 段中间仍夹着停摆行，所以
+        # ASTGCNDataset 还要额外吃 self.usable 掩码。5 个干净城里 u_* 本就是连续段。
+        self.train_start, self.train_end = int(u_tr[0]), int(u_tr[-1]) + 1
+        self.valid_start, self.valid_end = int(u_va[0]), int(u_va[-1]) + 1
+        self.test_start, self.test_end = int(u_te[0]), int(u_te[-1]) + 1
 
-        # Validate that training set is not empty
-        assert len(train_feat) > 0, "The training set cannot be empty!"
+    def window_starts(self, split_id: int, seq_l: int, pre_len: int) -> np.ndarray:
+        """该 split 的窗口起点（全局下标）。**取窗的唯一入口。**
+
+        薄包装 :func:`api.utils.split_window_starts`，让脚本不必自己碰
+        ``usable`` / ``split_of_row``（也避免像以前那样手算
+        ``end - start - seq_l - pre_len`` —— 那在有停摆缺口时会错）。
+        """
+        return split_window_starts(self.usable, self.split_of_row, split_id, seq_l, pre_len)
 
     def create_loaders(
             self,
@@ -620,36 +684,19 @@ class EVDataset(object):
         self.tiles_path = tiles_path
         self.city = city
         if model_name == 'astgcn':
-            train_dataset = ASTGCNDataset(
-                self.scaled_feat,
-                self.train_start,
-                self.train_end,
-                pre_len,
-                device,
-                recent_len=ASTGCN_RECENT_LEN,
-                daily_len=ASTGCN_DAILY_LEN,
-                daily_interval=ASTGCN_DAILY_INTERVAL,
-            )
-            valid_dataset = ASTGCNDataset(
-                self.scaled_feat,
-                self.valid_start,
-                self.valid_end,
-                pre_len,
-                device,
-                recent_len=ASTGCN_RECENT_LEN,
-                daily_len=ASTGCN_DAILY_LEN,
-                daily_interval=ASTGCN_DAILY_INTERVAL,
-            )
-            test_dataset = ASTGCNDataset(
-                self.scaled_feat,
-                self.test_start,
-                self.test_end,
-                pre_len,
-                device,
-                recent_len=ASTGCN_RECENT_LEN,
-                daily_len=ASTGCN_DAILY_LEN,
-                daily_interval=ASTGCN_DAILY_INTERVAL,
-            )
+            # usable 掩码：区间边界只是"可用行的首尾"，中间可能夹着停摆行（AMS）
+            def _astgcn(start, end):
+                return ASTGCNDataset(
+                    self.scaled_feat, start, end, pre_len, device,
+                    recent_len=ASTGCN_RECENT_LEN,
+                    daily_len=ASTGCN_DAILY_LEN,
+                    daily_interval=ASTGCN_DAILY_INTERVAL,
+                    usable=self.usable,
+                )
+
+            train_dataset = _astgcn(self.train_start, self.train_end)
+            valid_dataset = _astgcn(self.valid_start, self.valid_end)
+            test_dataset = _astgcn(self.test_start, self.test_end)
         elif model_name == 'ev_vlm':
             # EV-VLM requires multimodal data loading
             from transformers import GPT2Tokenizer, SiglipProcessor, SiglipVisionModel
@@ -815,16 +862,25 @@ class EVDataset(object):
             self._gpt_tokenizer = gpt_tokenizer
             self._SITE_VISION_EMB = SITE_VISION_EMB
 
-            # Create base datasets
-            base_train = CreateDataset(seq_l, pre_len, self.train_feat, self.train_extra_feat, device)
-            base_valid = CreateDataset(seq_l, pre_len, self.valid_feat, self.valid_extra_feat, device)
-            base_test = CreateDataset(seq_l, pre_len, self.test_feat, self.test_extra_feat, device)
+            # Create base datasets. 用**全量** scaled_feat + 该 split 的窗口起点，
+            # 而不是预先切好的连续段——窗口起点由 split_window_starts 统一给出
+            # （跳过停摆缺口；_TIME_IDS 也是按全局起点建的，下标天然对得上）。
+            def _base(split_id):
+                st = self.window_starts(split_id, seq_l, pre_len)
+                return CreateDataset(
+                    seq_l, pre_len, self.scaled_feat, self.extra_feat, device, starts=st
+                )
 
-            # Wrap with EV_VLM_Dataset, passing the global window-start offset per split
-            # so time_ids can be looked up by absolute sample index.
-            train_dataset = EV_VLM_Dataset(base_train, tiles_path, city, self.feat_columns, {}, {}, start_offset=0)
-            valid_dataset = EV_VLM_Dataset(base_valid, tiles_path, city, self.feat_columns, {}, {}, start_offset=self.valid_start)
-            test_dataset = EV_VLM_Dataset(base_test, tiles_path, city, self.feat_columns, {}, {}, start_offset=self.test_start)
+            base_train = _base(SPLIT_TRAIN)
+            base_valid = _base(SPLIT_VALID)
+            base_test = _base(SPLIT_TEST)
+
+            # Wrap with EV_VLM_Dataset; the global window-start index comes from the
+            # base dataset itself now (no offset arithmetic -- windows are not a
+            # contiguous run when outage gaps are present).
+            train_dataset = EV_VLM_Dataset(base_train, tiles_path, city, self.feat_columns, {}, {})
+            valid_dataset = EV_VLM_Dataset(base_valid, tiles_path, city, self.feat_columns, {}, {})
+            test_dataset = EV_VLM_Dataset(base_test, tiles_path, city, self.feat_columns, {}, {})
 
             train_loader = DataLoader(
                 train_dataset, batch_size=batch_size, shuffle=False, drop_last=True,
@@ -839,18 +895,16 @@ class EVDataset(object):
                 collate_fn=self.ev_vlm_collate
             )
         else:
-            # Create training dataset and loader with shuffling
-            train_dataset = CreateDataset(
-                seq_l, pre_len, self.train_feat, self.train_extra_feat, device
-            )
-            # Create validation dataset and loader (no shuffling)
-            valid_dataset = CreateDataset(
-                seq_l, pre_len, self.valid_feat, self.valid_extra_feat, device
-            )
-            # Create test dataset and loader (no shuffling)
-            test_dataset = CreateDataset(
-                seq_l, pre_len, self.test_feat, self.test_extra_feat, device
-            )
+            # 与 ev_vlm 分支同口径：全量数组 + 该 split 的窗口起点
+            def _base(split_id):
+                st = self.window_starts(split_id, seq_l, pre_len)
+                return CreateDataset(
+                    seq_l, pre_len, self.scaled_feat, self.extra_feat, device, starts=st
+                )
+
+            train_dataset = _base(SPLIT_TRAIN)
+            valid_dataset = _base(SPLIT_VALID)
+            test_dataset = _base(SPLIT_TEST)
             train_loader = DataLoader(
                 train_dataset, batch_size=batch_size, shuffle=False, drop_last=True
             )

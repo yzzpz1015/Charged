@@ -81,6 +81,17 @@ def main():
         f"pre_len={args.pre_len}, fold={args.fold}, auxiliary={args.auxiliary}, pred_type={args.pred_type}"
     )
 
+    # Cross-validation split. **必须早于读 num_node**：split 会按"训练期均值为 0"
+    # 剔站（与基线 script/prob_baseline.py 同口径），站数在那之后才定下来。
+    ev_dataset.split_cross_validation(
+        fold=args.fold,
+        total_fold=args.total_fold,
+        train_ratio=TRAIN_RATIO,
+        valid_ratio=VAL_RATIO,
+    )
+    print(
+        f"Split outcome - Training set: {len(ev_dataset.train_feat)}, Validation set: {len(ev_dataset.valid_feat)}, Test set: {len(ev_dataset.test_feat)}")
+
     # Determine number of nodes and features
     num_node = ev_dataset.feat.shape[1] if args.pred_type == 'site' else 1
     n_fea = get_n_feature(ev_dataset.extra_feat)
@@ -103,16 +114,6 @@ def main():
     if args.model not in ('lo', 'ar', 'arima'):
         ev_model.model = ev_model.model.to(device)
 
-    # Cross-validation split
-    ev_dataset.split_cross_validation(
-        fold=args.fold,
-        total_fold=args.total_fold,
-        train_ratio=TRAIN_RATIO,
-        valid_ratio=VAL_RATIO,
-    )
-
-    print(
-        f"Split outcome - Training set: {len(ev_dataset.train_feat)}, Validation set: {len(ev_dataset.valid_feat)}, Test set: {len(ev_dataset.test_feat)}")
     ev_dataset.create_loaders(
         seq_l=args.seq_l,
         pre_len=args.pre_len,

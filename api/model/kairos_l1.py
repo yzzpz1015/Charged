@@ -75,6 +75,7 @@ class KairosL1(nn.Module):
         self,
         backbone: nn.Module,
         pre_len: int,
+        quantiles: Optional[List[float]] = None,
         use_lora: bool = False,
         lora_rank: int = 8,
         lora_alpha: int = 16,
@@ -87,20 +88,33 @@ class KairosL1(nn.Module):
         self.d_model = backbone.config.d_model
         self.use_lora = use_lora
         self.use_llm_semantics = use_llm_semantics
+        # quantiles=None -> 点预测头（MSE）；给了 -> 分位数头（pinball），做法③。
+        # 用 is not None / len 判断：调用方传的是 np.ndarray，`if quantiles` 会抛
+        # "truth value of an array with more than one element is ambiguous"。
+        self.quantiles = ([float(q) for q in quantiles]
+                          if quantiles is not None and len(quantiles) > 0 else None)
+        Q = len(self.quantiles) if self.quantiles else 1
 
         # 1. freeze the whole trunk first (so later LoRA params stay trainable)
         for p in backbone.parameters():
             p.requires_grad = False
 
+        # 1b. MoE Gate 的 bias **不是梯度改的，是前向里改的**（见 train()）。记下出厂学习率，
+        #     切 eval 时置 0 —— 否则推理不是纯函数。
+        self._gate_rates = [(m, float(m.update_bias_rate))
+                            for m in backbone.modules()
+                            if hasattr(m, 'update_bias_rate') and hasattr(m, 'bias')]
+
         # 2. optional LoRA on attention projections
         self.lora_modules = inject_lora(backbone, lora_rank, lora_alpha) if use_lora else []
 
-        # 3. point prediction head (replaces Kairos's quantile head)
+        # 3. head (replaces Kairos's own quantile head). 分位数头输出 [pre_len*Q]，
+        #    Q 个分位点按最后一维排在每个步长的后面。
         self.head = nn.Sequential(
             nn.LayerNorm(self.d_model),
             nn.Linear(self.d_model, self.d_model),
             nn.GELU(),
-            nn.Linear(self.d_model, pre_len),
+            nn.Linear(self.d_model, pre_len * Q),
         )
 
         # 4. optional LLM semantics injection (L1b)
@@ -120,6 +134,33 @@ class KairosL1(nn.Module):
             text_dim = self.text_encoder.config.n_embd
             self.text_proj = nn.Linear(text_dim, self.d_model)
             self.gate = nn.Parameter(torch.zeros(1))  # scalar gate, init 0 => L1b == L1-plain at t=0
+
+    def train(self, mode: bool = True):
+        """切模式时同步 Gate 的 bias 学习率 —— 让**推理**成为纯函数。
+
+        Kairos 的 MoE Gate 在 forward 里**无条件**改自己的 bias（负载均衡）：
+
+            with torch.no_grad():
+                self.bias += self.update_bias_rate * (load_error / total_weights)
+
+        没有 ``if self.training`` 保护（``/tmp/Kairos_repo/tsfm/model/kairos/moe.py``
+        的 ``Gate.forward``），而 ``load_error`` 是**对整个 batch 求和**的。实测
+        （JHB，同一份权重、同一批数据）：
+
+          * 同一输入连跑两次：25.2% 的元素差 >1e-3，最大差 18.8；
+          * 换个 batch_size 重跑：max|Δ| 9.5 —— 先前当成"批形状敏感"，其实是这个漂移；
+          * 固定随机种子无效：不是 RNG，是模型状态在被改写。
+
+        这不是浮点尾差。训练时保留（这是 Kairos 的设计：辅助无损负载均衡）；推理时
+        必须冻结，否则同一份权重对同一个窗口的预测取决于它排在第几批，结果不可复现，
+        也没法与落盘值逐值对账。
+
+        对聚合指标的代价很小（R² 0.3784 漂移 / 0.3785 冻结，差 0.0004），但复现性上不可接受。
+        """
+        super().train(mode)
+        for mod, rate in self._gate_rates:
+            mod.update_bias_rate = rate if mode else 0.0
+        return self
 
     def forward(
         self,
@@ -141,5 +182,42 @@ class KairosL1(nn.Module):
             s_text = self.text_proj(pooled)  # [B, d_model]
             h = h + self.gate * torch.tanh(s_text)
 
-        y_norm = self.head(h)  # [B, pre_len]
+        y_norm = self.head(h)  # [B, pre_len] 或 [B, pre_len*Q]
+        if self.quantiles:
+            y_norm = y_norm.view(-1, self.pre_len, len(self.quantiles))  # [B, pre_len, Q]
         return y_norm, loc_scale
+
+    def quantile_loss(
+        self,
+        y_norm: torch.Tensor,
+        y: torch.Tensor,
+        loc: torch.Tensor,
+        scale: torch.Tensor,
+    ) -> torch.Tensor:
+        """分位数（pinball）损失，**在原始空间算**。
+
+        pinball 对缩放是正齐次的（``rho(c·e) = c·rho(e)``，c>0），所以在原始空间算
+        等价于"每个样本按自己的量级加权"——这与评测指标 CRPS 的口径一致，也避免了
+        小 scale 样本被放大。对均匀分位网格取平均，乘以 2 就是 CRPS 的无偏表示：
+
+            CRPS(F, y) = 2 * ∫_0^1 rho_tau(F^{-1}(tau), y) dtau
+
+        所以最小化这个损失 ≡ 直接最小化 CRPS。
+        """
+        q = torch.tensor(self.quantiles, device=y.device, dtype=y.dtype)   # [Q]
+        # loc/scale 是 **2 维** [B, 1]，所以只能用 unsqueeze(-1) 补到 [B, 1, 1]。
+        # 写 `scale[:, None, None]` 会插**两个**新轴得到 [B, 1, 1, 1]，再和
+        # [B, pre_len, Q] 广播就变成 [B, B, pre_len, Q] —— 显存按 B² 涨，
+        # B=512 时单次分配 6.96 GiB 直接 OOM（2026-10-06 踩过）。
+        pred = y_norm * scale.unsqueeze(-1) + loc.unsqueeze(-1)            # [B, pre_len, Q]
+        err = y[:, :, None] - pred                                         # [B, pre_len, Q]
+        rho = torch.maximum(q * err, (q - 1.0) * err)
+        return rho.mean()
+
+    def denorm(self, y_norm: torch.Tensor, loc: torch.Tensor, scale: torch.Tensor):
+        """归一化空间 -> 原始空间。点预测 [B,pre_len] 与分位数 [B,pre_len,Q] 通用。"""
+        # loc/scale 是 [B,1]（2 维），3 维情形同样只能用 unsqueeze(-1)，
+        # 否则会广播成 [B,B,pre_len,Q] 并静默返回错形状（no_grad 下不报错）。
+        if y_norm.dim() == 3:
+            return y_norm * scale.unsqueeze(-1) + loc.unsqueeze(-1)
+        return y_norm * scale + loc

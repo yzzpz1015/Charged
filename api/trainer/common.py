@@ -594,9 +594,17 @@ class PredictionTrainer(object):
                     best_val_loss = avg_val_loss
                     early_stop_counter = 0
                     os.makedirs(self.save_path, exist_ok=True)
-                    # Only save trainable params (skip frozen GPT-2, SigLIP towers)
+                    # 只存「可训练参数 + 全部 buffer」：
+                    #   * 可训练参数 —— 冻结的预训练骨干（GPT-2 / SigLIP）不存，保住体积优势；
+                    #   * buffer —— **必须存**。BatchNorm 的 running_mean/running_var 是
+                    #     buffer 而非 parameter，漏掉它 fresh-process 推理会静默沿用
+                    #     mean=0/var=1 的初始化统计，预测系统性偏移（PatchTST 的
+                    #     norm_type=batchnorm 就踩了这个坑；训练进程内 test() 看不出来，
+                    #     因为内存里的 buffer 是对的）。buffer 都很小，代价可忽略。
+                    keep = {n for n, p in self.ev_model.model.named_parameters() if p.requires_grad}
+                    keep |= {n for n, _ in self.ev_model.model.named_buffers()}
                     trainable = {k: v for k, v in self.ev_model.model.state_dict().items()
-                                 if k in [n for n, p in self.ev_model.model.named_parameters() if p.requires_grad]}
+                                 if k in keep}
                     ckpt_path = os.path.join(self.save_path, 'train.pth')
                     torch.save(trainable, ckpt_path)
             elif self.early_stop_patience > 0:

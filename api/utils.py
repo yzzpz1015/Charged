@@ -145,6 +145,10 @@ class CreateDataset(Dataset):
         feat (np.ndarray): Main feature series of shape [T, N].
         extra_feat (np.ndarray or None): Auxiliary feature series of shape [T, N, C].
         device (torch.device): Target device for tensor placement (CPU/GPU).
+        starts (np.ndarray or None): 窗口起点的**全局下标**，由
+            :func:`split_window_starts` 产出。给定时直接按它取窗（支持停摆缺口 /
+            分段）；为 None 时退化为旧的连续枚举（每行都可用、不分段）。
+            ``feat`` 必须是**全量**数组（含缺口），标签切片才能用绝对下标。
     """
 
     def __init__(
@@ -154,10 +158,21 @@ class CreateDataset(Dataset):
             feat: np.ndarray,
             extra_feat: Optional[np.ndarray],
             device: torch.device,
+            starts: Optional[np.ndarray] = None,
     ) -> None:
         """Initialize the dataset with features and create sliding window samples."""
-        # Create sliding window sequences and labels from main features
-        x, y = create_rnn_data(feat, seq_l, pre_len)
+        if starts is None:
+            # 连续枚举：起点就是 arange，等价于「全部行可用、不分段」
+            x, y = create_rnn_data(feat, seq_l, pre_len)
+            self.starts = None           # None == arange(0, len(x))
+        else:
+            self.starts = np.asarray(starts, dtype=np.int64)
+            x = _take_windows(feat, self.starts, seq_l)
+            if len(self.starts) == 0:
+                y = np.zeros((0,) + feat.shape[1:], dtype=feat.dtype)
+            else:
+                y = feat[self.starts + seq_l + pre_len - 1]
+
         self.feat = torch.Tensor(x)      # Convert to PyTorch tensor
         if pre_len > 1:
             # Multi-step: store raw feat for label slicing, y is single-step
@@ -168,13 +183,21 @@ class CreateDataset(Dataset):
             self.label = torch.Tensor(y)  # [num_samples, N]
         self.extra_feat = None           # Initialize auxiliary features as None
 
-        # Process auxiliary features if provided
+        # Process auxiliary features if provided.
+        # **必须用同一组起点**：aux 全量数组 + 同一 starts，逐窗口对齐。
         if extra_feat is not None:
-            x2, _ = create_rnn_data(extra_feat, seq_l, pre_len)  # Create auxiliary sequences
+            if self.starts is None:
+                x2, _ = create_rnn_data(extra_feat, seq_l, pre_len)
+            else:
+                x2 = _take_windows(extra_feat, self.starts, seq_l)
             self.extra_feat = torch.Tensor(x2)  # Convert to tensor
         self.device = device  # Store target device
         self.seq_l = seq_l
         self.pre_len = pre_len
+
+    def window_start(self, idx: int) -> int:
+        """第 idx 个样本的窗口起点（全局下标）。None 时等价于 idx。"""
+        return idx if self.starts is None else int(self.starts[idx])
 
     def __len__(self) -> int:
         """Return the number of samples in the dataset."""
@@ -201,8 +224,9 @@ class CreateDataset(Dataset):
 
         # Multi-step label: slice from raw feat
         if self.feat_raw is not None and self.pre_len > 1:
-            # feat_raw: [T, N], idx corresponds to start position
-            label = self.feat_raw[idx + self.seq_l: idx + self.seq_l + self.pre_len].T.to(self.device)  # [N, pre_len]
+            # feat_raw: [T, N] 全量；窗口起点是**全局下标**（starts[idx]），不是 idx
+            s = self.window_start(idx)
+            label = self.feat_raw[s + self.seq_l: s + self.seq_l + self.pre_len].T.to(self.device)  # [N, pre_len]
         else:
             label = self.label[idx].to(self.device)  # [N]
 
@@ -234,7 +258,6 @@ class EV_VLM_Dataset(Dataset):
             site_ids: List[str],
             dyn_templates: Dict[str, str],
             static_templates: Dict[str, str],
-            start_offset: int = 0,
     ) -> None:
         """
         Initialize EV_VLM dataset.
@@ -246,8 +269,6 @@ class EV_VLM_Dataset(Dataset):
             site_ids: List of site IDs for loading site-specific data
             dyn_templates: Dict mapping site_id to dynamic text template
             static_templates: Dict mapping site_id to static text template
-            start_offset: Absolute window-start index of the first sample in this split
-                (used to look up per-sample time text in the global cache).
         """
         self.base_dataset = base_dataset
         self.tiles_path = tiles_path
@@ -255,7 +276,6 @@ class EV_VLM_Dataset(Dataset):
         self.site_ids = site_ids
         self.dyn_templates = dyn_templates
         self.static_templates = static_templates
-        self.start_offset = start_offset
 
     def __len__(self) -> int:
         return len(self.base_dataset)
@@ -264,8 +284,11 @@ class EV_VLM_Dataset(Dataset):
         # Get base sample: [feat, label, extra_feat]
         base_sample = self.base_dataset[idx]
 
-        # Multimodal data will be loaded in collate_fn; append the global index.
-        return base_sample + (idx + self.start_offset,)
+        # Multimodal data will be loaded in collate_fn; append the **global window-start
+        # index** so per-sample time text can be looked up in the global _TIME_IDS cache.
+        # The start comes straight from the base dataset (no offset arithmetic -- with
+        # outage gaps the windows are not a contiguous run indexed from the split start).
+        return base_sample + (self.base_dataset.window_start(idx),)
 
 
 class ASTGCNDataset(Dataset):
@@ -281,28 +304,38 @@ class ASTGCNDataset(Dataset):
                 recent_len: int = ASTGCN_RECENT_LEN,
                 daily_len: int = ASTGCN_DAILY_LEN,
                 daily_interval: int = ASTGCN_DAILY_INTERVAL,
+                usable: Optional[np.ndarray] = None,
     ) -> None:
         if pre_len < 1:
             raise ValueError("ASTGCN expects pre_len >= 1")
 
         self.device = device
 
-        min_target = max(
-            start_idx,
-            recent_len,
-            daily_interval + daily_len,
-        )
+        hist_len = max(recent_len, daily_interval + daily_len)
+        min_target = max(start_idx, hist_len)
         max_target = end_idx - pre_len + 1
         if min_target >= max_target:
             raise ValueError(
                 "ASTGCN split is too short for the configured recent/daily windows"
             )
 
+        targets = np.arange(min_target, max_target, dtype=np.int64)
+        if usable is not None:
+            # [start_idx, end_idx) 只是**可用行的首尾下标**，中间仍夹着停摆行
+            # （AMS 的 train 段就是），所以位置边界不够用，要按掩码逐 target 判：
+            # 整段 [target-hist_len, target+pre_len) 必须连续可用。
+            run = usable_run_length(usable)
+            targets = targets[run[targets - hist_len] >= hist_len + pre_len]
+            if len(targets) == 0:
+                raise ValueError(
+                    "ASTGCN: 该段内没有整段可用的 target（停摆缺口太多）"
+                )
+
         recent_samples = []
         daily_samples = []
         label_samples = []
 
-        for target_idx in range(min_target, max_target):
+        for target_idx in targets:
             recent_samples.append(feat[target_idx - recent_len: target_idx])
             daily_samples.append(
                 feat[target_idx - daily_interval - daily_len: target_idx - daily_interval]
@@ -327,6 +360,127 @@ class ASTGCNDataset(Dataset):
         }, label, dummy
 
 
+def usable_run_length(usable: np.ndarray) -> np.ndarray:
+    """``run[i]`` = 从 i 起向右**连续可用**的行数（含 i 本身）；``run[T] == 0``。
+
+    用来一次性判定"从 i 开始的整段是否都可用"：``run[i] >= 所需长度``。
+    """
+    usable = np.asarray(usable, dtype=bool)
+    L = len(usable)
+    run = np.zeros(L + 1, dtype=np.int64)
+    for i in range(L - 1, -1, -1):
+        run[i] = run[i + 1] + 1 if usable[i] else 0
+    return run
+
+
+def split_window_starts(usable, split_of_row, split_id, lookback, pre_len):
+    """返回属于某个 split 的窗口起点（全局下标）。**窗口语义的唯一来源。**
+
+    一个起点 ``i`` 合法当且仅当：
+
+    1. 整段 ``[i, i+lookback+pre_len)`` 都可用（不跨停摆缺口）；
+    2. 预测目标 ``[i+lookback, i+lookback+pre_len)`` 的每一行都属于 ``split_id``；
+    3. 历史 ``[i, i+lookback)`` 只需可用——**允许伸进更早的 split**，因为"过去
+       seq_l 小时"本来就该往前看，这是因果合法的。
+
+    与 ``script/prob_baseline.py`` 的划分同口径（见 memory data-split-scheme）。
+
+    Args:
+        usable (np.ndarray): [T] bool，该行是否可用（停摆行/ fold 外的行为 False）。
+        split_of_row (np.ndarray): [T] int8，行归属（-1 不可用 / 0 train / 1 valid / 2 test）。
+        split_id (int): 0=train, 1=valid, 2=test。
+        lookback (int): 输入窗口长度 seq_l。
+        pre_len (int): 预测步数。
+
+    Returns:
+        np.ndarray: int64 升序的窗口起点（全局下标）。可能为空。
+    """
+    L = len(usable)
+    span = lookback + pre_len
+    if L < span:
+        return np.zeros(0, dtype=np.int64)
+
+    # run[i] = 从 i 起向右**连续可用**的行数（含 i 本身）
+    run = usable_run_length(usable)
+
+    # 上界是 L-span（含），即最后一个完整窗口仍能塞进数组 —— 旧 create_rnn_data 的
+    # range(L-lookback-predict_time) 恰好漏掉了这一个。
+    cand = np.arange(0, L - span + 1, dtype=np.int64)
+    cand = cand[run[cand] >= span]
+    if len(cand) == 0:
+        return cand
+
+    # 目标块整块属于 split_id：用前缀和判"块内全是"（O(1)/窗口）
+    is_id = (np.asarray(split_of_row) == split_id).astype(np.int64)
+    csum = np.concatenate([[0], np.cumsum(is_id)])
+    t0, t1 = cand + lookback, cand + span
+    return cand[(csum[t1] - csum[t0]) == pre_len]
+
+
+def straight_stretch_hours(x, tol: float = 1e-6, min_len: int = 72) -> np.ndarray:
+    """[T] bool：该小时落在「逐小时增量恒定且非零、连续 >= min_len 小时」的段里。
+
+    这是站点年度总量被摊到全年生成的伪序列（图上那条几乎直线上涨的窗口），
+    不是真实需求。判定与 ``script/detect_straight_windows.py`` 完全一致。
+
+    注意：增量恒为 0 的段（长期停摆/真零）**不算**，那是真实状态，不能删。
+    """
+    x = np.asarray(x, dtype=np.float64)
+    T = len(x)
+    m = np.zeros(T, dtype=bool)
+    if T < 2:
+        return m
+    d = np.diff(x)
+    fin = np.isfinite(d)
+    eq = np.zeros(len(d), dtype=bool)
+    eq[1:] = fin[1:] & fin[:-1] & (np.abs(d[1:] - d[:-1]) <= tol)
+    if not eq.any():
+        return m
+    ix = np.flatnonzero(np.diff(np.r_[False, eq, False]))
+    a, e = ix[0::2], ix[1::2]
+    h = e - a + 2                       # 覆盖的小时数（与原检测脚本同一口径）
+    for s, hh in zip(a[h >= min_len], h[h >= min_len]):
+        g = d[s - 1] if s > 0 else d[0]
+        if abs(g) > tol:                # 增量恒为 0 的段不算
+            m[s:s + hh] = True
+    return m
+
+
+def straight_window_keep(raw, starts, lookback: int, pre_len: int,
+                         tol: float = 1e-6, min_len: int = 72) -> np.ndarray:
+    """[M, N] bool：该 (窗口, 站) 是否保留 —— 整段 [i, i+lookback+pre_len) 无合成直线段。
+
+    模型是**逐站**预测的（训练时把 [M,N] 展成 M*N 条单站样本），所以剔除也按
+    站×窗做：A 站某段是直线，不影响同一时刻其他站，不必整行删除。
+
+    输入 72h 与目标 72h 都在检查范围内：拿合成历史去预测真实目标，同样是在
+    学伪数据。
+    """
+    raw = np.asarray(raw, dtype=np.float64)
+    T, N = raw.shape
+    starts = np.asarray(starts, dtype=np.int64)
+    span = lookback + pre_len
+    keep = np.zeros((len(starts), N), dtype=bool)
+    ok = starts + span <= T
+    for j in range(N):
+        bad = straight_stretch_hours(raw[:, j], tol, min_len)
+        if not bad.any():
+            keep[ok, j] = True
+            continue
+        c = np.r_[0, np.cumsum(bad.astype(np.int64))]
+        keep[ok, j] = (c[starts[ok] + span] - c[starts[ok]]) == 0
+    return keep
+
+
+def _take_windows(arr: np.ndarray, starts: np.ndarray, lookback: int) -> np.ndarray:
+    """把 ``arr[starts[j] : starts[j]+lookback]`` 堆成 ``[M, lookback, ...]``。"""
+    M = len(starts)
+    if M == 0:
+        return np.zeros((0, lookback) + arr.shape[1:], dtype=arr.dtype)
+    idx = starts[:, None] + np.arange(lookback, dtype=np.int64)[None, :]   # [M, lookback]
+    return arr[idx]
+
+
 def create_rnn_data(
         dataset: np.ndarray,
         lookback: int,
@@ -334,10 +488,14 @@ def create_rnn_data(
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
     Create sliding-window sequences and corresponding labels from time series data.
-    
+
     This function implements sliding window sampling for time series forecasting.
     It creates input sequences of length 'lookback' and corresponding target
     values that are 'predict_time' steps ahead of the sequence end.
+
+    No gap awareness here (all rows treated as usable, no split segmentation) --
+    it is a thin wrapper over :func:`split_window_starts` so that window
+    enumeration has exactly one implementation.
 
     Args:
         dataset (np.ndarray): Time series data of shape [T, ...].
@@ -348,15 +506,16 @@ def create_rnn_data(
         x (np.ndarray): Input sequences of shape [num_samples, lookback, ...].
         y (np.ndarray): Target values of shape [num_samples, ...] at position lookback+predict_time-1.
     """
-    x, y = [], []  # Initialize lists to store sequences and labels
-    L = len(dataset)  # Total length of the dataset
-    
-    # Create sliding window samples
-    for i in range(L - lookback - predict_time):
-        x.append(dataset[i: i + lookback])  # Input sequence from i to i+lookback
-        y.append(dataset[i + lookback + predict_time - 1])  # Target at i+lookback+predict_time-1
-    
-    return np.array(x), np.array(y)  # Convert lists to numpy arrays
+    L = len(dataset)
+    starts = split_window_starts(
+        np.ones(L, dtype=bool), np.zeros(L, dtype=np.int8), 0, lookback, predict_time
+    )
+    x = _take_windows(dataset, starts, lookback)
+    if len(starts) == 0:
+        return x, np.zeros((0,) + dataset.shape[1:], dtype=dataset.dtype)
+    y = dataset[starts + lookback + predict_time - 1]
+    return x, y
+
 
 
 def calculate_regression_metrics(
@@ -455,11 +614,11 @@ def convert_numpy(obj: Any) -> Any:
 def get_data_paths(
         ori_path: str,
         cities: str,
-        suffix: str = '_remove_zero',
+        suffix: str = '_remove_const',
 ) -> Dict[str, str]:
     """
     Generate data directory paths for multiple cities.
-    
+
     This function constructs the full directory paths for each city's data
     based on the base path, city codes, and optional suffix. It supports
     multi-city configurations separated by '+' characters.
@@ -467,7 +626,7 @@ def get_data_paths(
     Args:
         ori_path (str): Base directory path containing city data folders.
         cities (str): City codes separated by '+' (e.g., 'AMS+JHB+LOA').
-        suffix (str): Directory suffix for each city (default '_remove_zero').
+        suffix (str): Directory suffix for each city (default '_remove_const').
 
     Returns:
         dict: Mapping from city code to full data directory path.

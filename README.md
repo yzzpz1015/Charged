@@ -38,7 +38,7 @@ Kairos 主干（`mldi-lab/Kairos_23m`）在训练/推理时经 `--checkpoint` �
 
 ## 2. 数据说明
 
-- **`data/<CITY>/`**：6 城（AMS / JHB / LOA / MEL / SPO / SZH）小时级充电数据，每城 10 个 CSV（volume / duration / e_price / s_price / sites / chargers / distance / weather / poi / info）；`<CITY>_remove_zero/` 为剔除零充电站点后的干净版本（训练默认用此）。字段说明见 `data/README.md`。
+- **`data/<CITY>/`**：6 城（AMS / JHB / LOA / MEL / SPO / SZH）小时级充电数据，每城 10 个 CSV（volume / duration / e_price / s_price / sites / chargers / distance / weather / poi / info）。干净版本两级：`<CITY>_remove_zero/`（剔除全零充电站）、`<CITY>_remove_const/`（再剔除「恒值」站：恒 0 闲置残漏 + 恒非 0 常量填充伪影，**训练默认用此**）。被剔除站点的排除清单见 `data/constant_sites.csv`（539 站，含 `kind` 字段区分 zero/fill）。字段说明见 `data/README.md`。
 - **`tiles_dataset/<CITY>/`**：JHB / MEL / LOA 三城的卫星瓦片（`tiles/` 与拼接 `mosaic/` PNG，z16）及 DINOv2 预计算嵌入（`embedding/z16/`），索引见 `tiles_dataset/site_tile_index.csv`。
 
 ---
@@ -59,7 +59,7 @@ python script/train_kairos_l1.py --city MEL --variant lora --seq_l 72 --pre_len 
 python script/train_kairos_l1.py --city MEL --variant l1b  --seq_l 72 --pre_len 6
 ```
 
-> `--data_path` 默认 `data/`，运行时自动 append `_remove_zero` 指向干净版本。
+> `--data_path` 默认 `data/`，运行时自动 append `--data_suffix`（默认 `_remove_const`，指向已剔恒值站的干净版）。传 `--data_suffix _remove_zero` 可复现历史 R²（见下表）。
 
 探针脚本（均为负结果，用于论文严谨性论证）见 `script/`：邻居流 `neighbor_probe*.py`、外生时序 `exog_probe.py`、静态上下文 `static_context_*.py` / `sat_patch_probe.py`、检索 `retrieval_probe.py` / `kairos_retrieval_teacher.py`、多模态注入 `train_kairos_l2v3.py`。
 
@@ -74,6 +74,8 @@ python script/train_kairos_l1.py --city MEL --variant l1b  --seq_l 72 --pre_len 
 | L2 | L1 + 三路外部模态逐层注入 | 0.8028（正则假象） | 0.7695（有害） |
 | PatchTST（训练） | 专门训练基线 | 0.7866 | 0.7739 |
 | FreTS（训练） | 频域基线 | 0.7845 | 0.7870 |
+
+> 上表为 `_remove_zero` 上的历史结果（MEL fold6）。自 `_remove_const` 成为默认后，重跑会在已剔恒值站的数据上略变（MEL 仅剔 2 站，几乎不变；SZH 剔 519/1379 站，变化显著）。
 
 ---
 

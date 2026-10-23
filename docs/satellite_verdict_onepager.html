@@ -1,0 +1,151 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>卫星图判负一页版</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Serif:wght@600&display=swap">
+
+<style>
+:root{
+  --paper:#F7F8FA; --surface:#FFFFFF; --ink:#1B2130; --ink-2:#414B5E;
+  --muted:#6B7488; --rule:#DCE1E9; --teal:#14705F; --teal-bg:#E4F0ED;
+  --clay:#9A5B3F; --clay-bg:#F4EAE4;
+  --sans:"IBM Plex Sans","PingFang SC","Hiragino Sans GB","Microsoft YaHei","Noto Sans CJK SC",system-ui,sans-serif;
+  --serif:"IBM Plex Serif","Songti SC","Noto Serif CJK SC",Georgia,serif;
+  --mono:"IBM Plex Mono",Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --paper:#12151C; --surface:#171B24; --ink:#E6EAF1; --ink-2:#C2CAD7;
+    --muted:#93A0B4; --rule:#262D3A; --teal:#5CC4AA; --teal-bg:#16302B;
+    --clay:#D99270; --clay-bg:#2E2119;
+  }
+}
+:root[data-theme="dark"]{
+  --paper:#12151C; --surface:#171B24; --ink:#E6EAF1; --ink-2:#C2CAD7;
+  --muted:#93A0B4; --rule:#262D3A; --teal:#5CC4AA; --teal-bg:#16302B;
+  --clay:#D99270; --clay-bg:#2E2119;
+}
+*{box-sizing:border-box}
+body{
+  margin:0; background:var(--paper); color:var(--ink);
+  font-family:var(--sans); font-size:1.03rem; line-height:1.8;
+  -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:660px;margin:0 auto;padding:64px 26px 104px;display:flex;flex-direction:column;gap:56px}
+
+.eyebrow{font-family:var(--mono);font-size:.73rem;font-weight:600;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--muted);margin-bottom:14px}
+h1{font-family:var(--serif);font-size:clamp(2rem,1.4rem + 2.6vw,2.9rem);font-weight:600;
+  line-height:1.18;letter-spacing:-.02em;margin:0;text-wrap:balance}
+.answer{margin:20px 0 0;font-size:1.24rem;color:var(--ink-2);line-height:1.6}
+.answer b{color:var(--clay);font-weight:600}
+
+h2{font-family:var(--serif);font-size:1.28rem;font-weight:600;margin:0 0 4px;
+  display:flex;gap:12px;align-items:baseline;letter-spacing:-.01em}
+h2 i{font-family:var(--mono);font-style:normal;font-size:.75rem;font-weight:600;
+  color:var(--muted);letter-spacing:.1em;flex:none}
+p{margin:8px 0 0}
+.claim{font-size:1.1rem;font-weight:600;color:var(--ink);line-height:1.6}
+.body{color:var(--ink-2);max-width:58ch}
+
+section{display:flex;flex-direction:column;gap:34px}
+.reason{display:flex;flex-direction:column}
+.reason em{font-style:normal;font-weight:600;color:var(--ink);background:var(--teal-bg);
+  padding:1px 5px;border-radius:2px}
+.reason.warn em{background:var(--clay-bg)}
+
+.hero{background:var(--surface);border:1px solid var(--rule);border-radius:4px;
+  padding:26px 24px 20px;display:flex;flex-direction:column;gap:8px}
+.hero svg{width:100%;height:auto;display:block}
+.hero .cap{font-family:var(--mono);font-size:.75rem;color:var(--muted);letter-spacing:.03em;
+  border-top:1px solid var(--rule);padding-top:12px;margin-top:8px}
+
+.act{background:var(--clay-bg);border:1px solid var(--clay);border-radius:4px;
+  padding:24px 26px;display:flex;flex-direction:column;gap:12px}
+.act .ct{font-family:var(--mono);font-size:.73rem;font-weight:600;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--clay)}
+.act .lead{font-size:1.22rem;font-weight:600;line-height:1.5;margin:0}
+.act ul{margin:0;padding-left:1.1em;display:flex;flex-direction:column;gap:8px;color:var(--ink-2)}
+.act li::marker{color:var(--clay)}
+
+footer{border-top:1px solid var(--rule);padding-top:18px;font-size:.82rem;color:var(--muted);line-height:1.7}
+footer code{font-family:var(--mono);font-size:.92em}
+@media (max-width:640px){.wrap{padding:40px 18px 72px;gap:44px}}
+</style>
+
+<div class="wrap">
+
+<div>
+  <div class="eyebrow">CHARGED · EV 充电需求预测 · 2026-09-20</div>
+  <h1>卫星图这条路，我建议停</h1>
+  <p class="answer">问题是：卫星图能不能帮一个新城市预测充电需求。<b>答案是基本不能。</b></p>
+</div>
+
+<section>
+
+  <div class="reason">
+    <h2><i>理由一</i>真实场景下几乎没有信号</h2>
+    <p class="claim">换成"预测没见过的站点"来评测后，卫星图的预测能力只有 0.15。</p>
+    <p class="body">0.15 是什么概念：0 表示毫无关系，1 表示完全一致。跨城市测更差，统计上不显著——要测出这么小的效应，得再找 4 倍的站点。补充一句：在随机划分下它看起来很好，但那是另一种评测方式的问题，见理由三。</p>
+  </div>
+
+  <div class="reason">
+    <h2><i>理由二</i>还不如一个免费的数字</h2>
+    <p class="claim">"这个站有几个充电桩"——一个数字，任何城市都查得到，不用历史、不用卫星图——预测能力是它的 5 倍。</p>
+    <p class="body">而且把卫星图加进去，效果反而变差。也就是说：即使只拿到最基础的基础设施信息，卫星图也没有存在的必要。</p>
+  </div>
+
+  <div class="reason warn">
+    <h2><i>理由三</i>文献里的"有用"很可能是假象</h2>
+    <p class="claim">卫星图每个站只有一张，而在常见的随机划分里，同一张图会同时出现在训练和测试数据中。</p>
+    <p class="body">模型只要认出"这是哪个站"，就能把该站的历史水平背下来——看起来像"图像有用"，实际是把图当成了站点编号。我做了对照实验：<em>给每个站一个随机数，效果比真卫星图还好</em>。所以那些正面的结论，需要重新检查评测方式。</p>
+  </div>
+
+</section>
+
+<div class="hero">
+  <svg viewBox="0 0 520 132" role="img" aria-label="充电桩数预测能力 0.76，卫星图 0.15">
+    <g font-family="IBM Plex Mono, monospace" font-size="12">
+      <line x1="120" y1="14" x2="120" y2="104" stroke="var(--rule)" stroke-width="1"/>
+      <line x1="300" y1="14" x2="300" y2="104" stroke="var(--rule)" stroke-width="1" stroke-dasharray="3 3"/>
+
+      <text x="0" y="39" fill="var(--ink)">充电桩数</text>
+      <rect x="120" y="22" width="342" height="26" fill="var(--teal)"/>
+      <text x="470" y="39" fill="var(--teal)" font-weight="600">0.76</text>
+
+      <text x="0" y="89" fill="var(--ink)">卫星图</text>
+      <rect x="120" y="72" width="66" height="26" fill="var(--muted)" opacity="0.8"/>
+      <text x="194" y="89" fill="var(--ink-2)" font-weight="600">0.15</text>
+
+      <text x="120" y="124" fill="var(--muted)" text-anchor="middle" font-size="11">0</text>
+      <text x="300" y="124" fill="var(--muted)" text-anchor="middle" font-size="11">0.4</text>
+      <text x="462" y="124" fill="var(--muted)" text-anchor="end" font-size="11">0.8</text>
+    </g>
+  </svg>
+  <div class="cap">预测能力对比。一个数字 &gt; 768 维图像特征，差约 5 倍。</div>
+</div>
+
+<section>
+  <div class="reason">
+    <h2><i>附</i>一个意外发现</h2>
+    <p class="claim">那点信号落在 380 米这个尺度上——但它到底是什么，我只做完了排除法。</p>
+    <p class="body">能确定它<em>不是地理位置</em>（邻居站反而负相关，剔除周边站点后信号不变），也<em>不是土地用途</em>（用土地利用数据替代更差，把土地利用信息从图像里剔除后信号一点没少）。排除完，剩下最可能是微观建成形态——停车场布局、路网走向——但这一条尚未直接测量。视野放大到整城范围，信号直接归零。<b>所以这说的是"信息在哪里"，不是"能拿来用"——2% 的差异解释率撑不起一个模型。</b></p>
+  </div>
+</section>
+
+<div class="act">
+  <div class="ct">建议</div>
+  <p class="lead">停。</p>
+  <p class="body" style="margin-top:-4px">信号真实存在，但太弱、跨城不成立、且被免费数据完全覆盖，没有可做的增量空间。</p>
+  <ul>
+    <li><b>若继续</b>：写成"文献为什么看错了卫星图"的方法学论文——手上的站身份对照、视野扫描、以及 VisionEV 消融的结构分析已经成体系。前提是先补一组更高清的卫星图（我们的图比 VisionEV 糊 8.5 倍，这是审稿人一定会问的）。</li>
+    <li><b>若不继续</b>：卫星这条线整体搁置，回主线。</li>
+  </ul>
+</div>
+
+<footer>
+  完整实验记录（8 组实验、9 张数据表、含我修正过的判断与数据局限）见同目录 <code>satellite_transfer_verdict.html</code>。全部指标为逐折 Spearman 均值，20 个划分种子。
+</footer>
+
+</div>

@@ -68,8 +68,9 @@ def main():
     device = torch.device(f"cuda:{args.device}" if torch.cuda.is_available() else "cpu")
     random_seed(args.seed)
 
-    # Load dataset
-    data_dir = f"{args.data_path}{args.city}_remove_zero/"
+    # Load dataset. 用 _remove_const（已剔恒值站）——与基线 script/prob_baseline.py
+    # 同口径，否则站数不同、数字不能放一张表（SZH: 858 vs 1379）。
+    data_dir = f"{args.data_path}{args.city}_remove_const/"
     ev_dataset = EVDataset(
         feature=args.feature,
         auxiliary=args.auxiliary,
@@ -86,6 +87,18 @@ def main():
     print(
         f"Running {args.model} on {args.city} with feature={args.feature}, "
         f"pre_len={args.pre_len}, fold={args.fold}, auxiliary={args.auxiliary}, pred_type={args.pred_type}"
+    )
+
+    # Cross-validation split. **必须早于读 num_node**：split 会按"训练期均值为 0"
+    # 剔站（与基线 script/prob_baseline.py 同口径），站数在那之后才定下来。
+    ev_dataset.split_cross_validation(
+        fold=args.fold,
+        total_fold=args.total_fold,
+        train_ratio=TRAIN_RATIO,
+        valid_ratio=VAL_RATIO,
+    )
+    print(
+        f"Split outcome - Training set: {len(ev_dataset.train_feat)}, Validation set: {len(ev_dataset.valid_feat)}, Test set: {len(ev_dataset.test_feat)}"
     )
 
     # Determine number of nodes and features
@@ -125,17 +138,6 @@ def main():
     )
     if args.model not in ['lo','ar','arima']:
         ev_model.model=ev_model.model.to(device)
-
-    # Cross-validation split
-    ev_dataset.split_cross_validation(
-        fold=args.fold,
-        total_fold=args.total_fold,
-        train_ratio=TRAIN_RATIO,
-        valid_ratio=VAL_RATIO,
-    )
-
-    print(
-        f"Split outcome - Training set: {len(ev_dataset.train_feat)}, Validation set: {len(ev_dataset.valid_feat)}, Test set: {len(ev_dataset.test_feat)}")
 
     # Create DataLoaders
     skip_images = False

@@ -20,7 +20,7 @@ parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 if parent_dir not in sys.path:
     sys.path.append(parent_dir)
 
-from api.dataset.common import EVDataset
+from api.dataset.common import EVDataset, SPLIT_TEST
 from api.utils import calculate_regression_metrics, convert_numpy
 
 
@@ -32,6 +32,8 @@ def main():
     parser.add_argument('--fold', type=int, default=6)
     parser.add_argument('--total_fold', type=int, default=6)
     parser.add_argument('--data_path', default='data/')
+    parser.add_argument('--data_suffix', default='_remove_const',
+                        help='城市目录后缀：_remove_const(默认,已剔恒值站) / _remove_zero')
     parser.add_argument('--checkpoint', default='google/timesfm-2.0-500m-pytorch')
     parser.add_argument('--chunk_size', type=int, default=1024)
     # None -> model pads to its full context (2048). Smaller value truncates the
@@ -44,7 +46,7 @@ def main():
     args = parser.parse_args()
 
     device = torch.device(f"cuda:{args.device}" if torch.cuda.is_available() else "cpu")
-    data_dir = f"{args.data_path}{args.city}_remove_zero/"
+    data_dir = f"{args.data_path}{args.city}{args.data_suffix}/"
 
     # --- 1. Same dataset + same split as trained baselines ---
     ev_dataset = EVDataset(feature='volume', auxiliary='None', data_path=data_dir)
@@ -56,14 +58,16 @@ def main():
     )
     raw = ev_dataset.feat  # [T, N] raw volume (NOT standardized)
     N = raw.shape[1]
-    test_start = ev_dataset.test_start
-    test_end = ev_dataset.test_end
-    test_span = test_end - test_start
-    num_windows = test_span - args.seq_l - args.pre_len  # matches create_rnn_data
+    # 窗口起点必须来自 window_starts（新划分的唯一取窗入口）。旧写法
+    # ``test_end - test_start - seq_l - pre_len`` 假设起点是连续区间，新口径下是错的：
+    # 目标只需落在 test 段、历史可伸进上一段，所以合法窗口**比连续枚举多**；AMS 的段内
+    # 还夹着停摆行，连续枚举会把跨缺口的窗也当成合法。要么崩、要么静默错位。
+    starts = ev_dataset.window_starts(SPLIT_TEST, args.seq_l, args.pre_len)
     if args.limit_windows > 0:
-        num_windows = min(num_windows, args.limit_windows)
+        starts = starts[:args.limit_windows]
+    num_windows = len(starts)
     print(f"[data] city={args.city} raw_feat={raw.shape} N_sites={N} "
-          f"test_start={test_start} test_end={test_end} "
+          f"test={ev_dataset.test_start}~{ev_dataset.test_end} "
           f"num_windows={num_windows} total_series={num_windows * N}")
 
     # --- 2. Load TimesFM (frozen, zero-shot) ---
@@ -72,12 +76,12 @@ def main():
     print(f"[model] loaded {args.checkpoint} on {device}")
 
     # --- 3. Build raw history series + raw labels ---
-    # window i, site n: history = raw[test_start+i : test_start+i+seq_l, n]
-    #                  label   = raw[test_start+i+seq_l : ... +pre_len, n]
+    # window i, site n: history = raw[starts[i] : starts[i]+seq_l, n]
+    #                  label   = raw[starts[i]+seq_l : ... +pre_len, n]
     series = []
     labels = np.zeros((num_windows, N, args.pre_len), dtype=np.float32)
     for i in range(num_windows):
-        base = test_start + i
+        base = starts[i]
         hist = raw[base:base + args.seq_l, :].astype(np.float32)        # [seq_l, N]
         lab = raw[base + args.seq_l: base + args.seq_l + args.pre_len, :].astype(np.float32)  # [pre_len, N]
         labels[i] = lab.T                                                # [N, pre_len]

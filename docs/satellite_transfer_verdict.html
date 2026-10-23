@@ -1,0 +1,534 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>卫星图跨城迁移判负</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Serif:wght@400;500;600&display=swap">
+
+<style>
+:root{
+  --paper:#F7F8FA;
+  --surface:#FFFFFF;
+  --surface-2:#EFF2F6;
+  --ink:#1B2130;
+  --ink-2:#3C4658;
+  --muted:#6B7488;
+  --rule:#DCE1E9;
+  --rule-2:#C6CDD9;
+  --teal:#14705F;
+  --teal-bg:#E4F0ED;
+  --clay:#9A5B3F;
+  --clay-bg:#F4EAE4;
+  --shadow:0 1px 2px rgba(27,33,48,.05), 0 8px 24px -16px rgba(27,33,48,.28);
+
+  --fs-display:clamp(1.7rem,1.15rem + 2.1vw,2.5rem);
+  --fs-h2:1.14rem;
+  --fs-h3:1rem;
+  --fs-body:0.945rem;
+  --fs-small:0.84rem;
+  --fs-micro:0.735rem;
+
+  --sans:"IBM Plex Sans","PingFang SC","Hiragino Sans GB","Microsoft YaHei","Noto Sans CJK SC","Source Han Sans SC",system-ui,sans-serif;
+  --serif:"IBM Plex Serif","Songti SC","SimSun","Noto Serif CJK SC",Georgia,serif;
+  --mono:"IBM Plex Mono","SFMono-Regular",Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --paper:#12151C;
+    --surface:#171B24;
+    --surface-2:#1E2430;
+    --ink:#E6EAF1;
+    --ink-2:#C2CAD7;
+    --muted:#93A0B4;
+    --rule:#262D3A;
+    --rule-2:#333C4C;
+    --teal:#5CC4AA;
+    --teal-bg:#16302B;
+    --clay:#D99270;
+    --clay-bg:#2E2119;
+    --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 24px -16px rgba(0,0,0,.8);
+  }
+}
+:root[data-theme="dark"]{
+  --paper:#12151C;
+  --surface:#171B24;
+  --surface-2:#1E2430;
+  --ink:#E6EAF1;
+  --ink-2:#C2CAD7;
+  --muted:#93A0B4;
+  --rule:#262D3A;
+  --rule-2:#333C4C;
+  --teal:#5CC4AA;
+  --teal-bg:#16302B;
+  --clay:#D99270;
+  --clay-bg:#2E2119;
+  --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 24px -16px rgba(0,0,0,.8);
+}
+
+*{box-sizing:border-box}
+body{
+  margin:0;
+  background:var(--paper);
+  color:var(--ink);
+  font-family:var(--sans);
+  font-size:var(--fs-body);
+  line-height:1.72;
+  -webkit-font-smoothing:antialiased;
+  text-rendering:optimizeLegibility;
+}
+.wrap{max-width:820px;margin:0 auto;padding:56px 26px 96px;display:flex;flex-direction:column;gap:52px}
+code{font-family:var(--mono);font-size:.92em;font-variant-numeric:tabular-nums}
+
+/* ---------- header ---------- */
+header{display:flex;flex-direction:column;gap:16px;border-bottom:1px solid var(--rule-2);padding-bottom:28px}
+.eyebrow{
+  font-family:var(--mono);font-size:var(--fs-micro);font-weight:500;
+  letter-spacing:.13em;text-transform:uppercase;color:var(--muted);
+  display:flex;flex-wrap:wrap;gap:6px 14px;
+}
+.eyebrow b{color:var(--ink-2);font-weight:600}
+h1{
+  font-family:var(--serif);font-size:var(--fs-display);font-weight:600;
+  line-height:1.2;letter-spacing:-.015em;margin:0;text-wrap:balance;
+}
+.standfirst{margin:0;color:var(--ink-2);max-width:62ch}
+.standfirst code{font-family:var(--mono);font-size:.9em}
+
+/* ---------- verdict ---------- */
+.verdict{display:flex;flex-direction:column;gap:14px}
+.verdict-hd{
+  font-family:var(--mono);font-size:var(--fs-micro);font-weight:600;
+  letter-spacing:.13em;text-transform:uppercase;color:var(--clay);
+}
+.vcards{display:grid;gap:1px;background:var(--rule);border:1px solid var(--rule);border-radius:3px;overflow:hidden}
+.vcard{background:var(--surface);padding:15px 18px;display:flex;gap:14px;align-items:baseline}
+.vcard .tag{
+  font-family:var(--mono);font-size:var(--fs-micro);font-weight:600;
+  letter-spacing:.06em;color:var(--clay);background:var(--clay-bg);
+  padding:2px 7px;border-radius:2px;white-space:nowrap;flex:none;
+}
+.vcard p{margin:0}
+.vcard strong{font-weight:600}
+
+/* ---------- sections ---------- */
+section{display:flex;flex-direction:column;gap:20px}
+h2{
+  font-family:var(--serif);font-size:var(--fs-h2);font-weight:600;margin:0;
+  display:flex;align-items:baseline;gap:11px;letter-spacing:-.005em;
+  padding-bottom:11px;border-bottom:1px solid var(--rule);
+}
+h2 .sec{
+  font-family:var(--mono);font-size:var(--fs-micro);font-weight:600;
+  color:var(--muted);letter-spacing:.1em;flex:none;
+}
+h3{font-family:var(--sans);font-size:var(--fs-h3);font-weight:600;margin:0;line-height:1.5}
+p{margin:0;max-width:66ch}
+.dim{color:var(--muted)}
+.note{font-size:var(--fs-small);color:var(--muted);max-width:70ch}
+ul{margin:0;padding-left:1.15em;display:flex;flex-direction:column;gap:7px;max-width:66ch}
+li::marker{color:var(--rule-2)}
+em{font-style:normal;font-weight:600;color:var(--ink)}
+
+/* ---------- experiment block ---------- */
+.exp{display:flex;flex-direction:column;gap:13px}
+.exp-hd{display:flex;gap:12px;align-items:baseline}
+.eid{
+  font-family:var(--mono);font-size:var(--fs-micro);font-weight:600;
+  color:var(--ink-2);background:var(--surface-2);border:1px solid var(--rule);
+  padding:2px 7px;border-radius:2px;flex:none;letter-spacing:.04em;
+}
+.finding{
+  font-size:var(--fs-small);border-left:2px solid var(--teal);
+  padding:2px 0 2px 13px;color:var(--ink-2);max-width:66ch;
+}
+.finding.neg{border-left-color:var(--clay)}
+
+/* ---------- tables ---------- */
+.tw{overflow-x:auto;border:1px solid var(--rule);border-radius:3px;background:var(--surface)}
+table{border-collapse:collapse;width:100%;font-family:var(--mono);font-size:var(--fs-small);font-variant-numeric:tabular-nums}
+caption{
+  caption-side:top;text-align:left;font-family:var(--mono);font-size:var(--fs-micro);
+  color:var(--muted);padding:9px 14px;border-bottom:1px solid var(--rule);letter-spacing:.05em;
+}
+th,td{padding:8px 14px;text-align:left;border-bottom:1px solid var(--rule);white-space:nowrap}
+thead th{
+  font-weight:600;font-size:var(--fs-micro);letter-spacing:.07em;
+  text-transform:uppercase;color:var(--muted);background:var(--surface-2);
+}
+tbody tr:last-child td{border-bottom:none}
+td.num,th.num{text-align:right}
+.pos{color:var(--teal);font-weight:600}
+.nul{color:var(--clay);font-weight:600}
+.hi td{background:var(--teal-bg)}
+.hi-lo td{background:var(--clay-bg)}
+td .sub{color:var(--muted);font-size:.92em}
+
+/* ---------- svg figures ---------- */
+figure{margin:0;display:flex;flex-direction:column;gap:9px}
+figure svg{width:100%;height:auto;display:block;color:var(--muted)}
+figcaption{font-family:var(--mono);font-size:var(--fs-micro);color:var(--muted);letter-spacing:.03em}
+.figbox{border:1px solid var(--rule);border-radius:3px;background:var(--surface);padding:16px 16px 10px}
+
+/* ---------- callouts ---------- */
+.callout{
+  border:1px solid var(--rule);border-left:2px solid var(--clay);
+  border-radius:3px;background:var(--surface);padding:16px 18px;
+  display:flex;flex-direction:column;gap:11px;
+}
+.callout .ct{
+  font-family:var(--mono);font-size:var(--fs-micro);font-weight:600;
+  letter-spacing:.1em;text-transform:uppercase;color:var(--clay);
+}
+
+/* ---------- open questions ---------- */
+.qs{display:flex;flex-direction:column;gap:1px;background:var(--rule);border:1px solid var(--rule);border-radius:3px;overflow:hidden}
+.q{background:var(--surface);padding:16px 18px;display:flex;flex-direction:column;gap:6px}
+.q .qh{font-weight:600;display:flex;gap:10px;align-items:baseline}
+.q .qh span{font-family:var(--mono);font-size:var(--fs-micro);color:var(--muted);letter-spacing:.08em;flex:none}
+.q p{font-size:var(--fs-small);color:var(--ink-2)}
+
+footer{border-top:1px solid var(--rule);padding-top:18px;font-family:var(--mono);font-size:var(--fs-micro);color:var(--muted);letter-spacing:.04em}
+@media (max-width:640px){
+  .wrap{padding:36px 17px 68px;gap:42px}
+  .vcard{flex-direction:column;gap:7px}
+}
+</style>
+
+<div class="wrap">
+
+<header>
+  <div class="eyebrow">
+    <span><b>项目</b> CHARGED · EV 充电需求预测</span>
+    <span><b>数据</b> 6 城 · 主用 LOA / MEL / JHB</span>
+    <span><b>日期</b> 2026-09-20</span>
+  </div>
+  <h1>卫星图跨城迁移判负</h1>
+  <p class="standfirst">卫星图跨城零样本迁移这条线，在 CHARGED 上已可判定为不可行。以下是全部实验、可确定的结论、以及我修正过的判断，供方向定夺。</p>
+</header>
+
+<div class="verdict">
+  <div class="verdict-hd">判决 · 三条可确定的结论</div>
+  <div class="vcards">
+    <div class="vcard">
+      <span class="tag">判负</span>
+      <p>卫星图对充电需求预测<strong>没有可用增量</strong>。跨城 <code>ρ=0.146</code>（p=0.24，需 ~370 站才显著），被免费元数据 <code>charger_num</code> 的 <code>ρ=0.761</code> 碾压，且<strong>叠加后反而变差</strong>。</p>
+    </div>
+    <div class="vcard">
+      <span class="tag">机制</span>
+      <p>文献中「图像有用」的一个主要来源是<strong>站身份记忆</strong>：在 station-week 随机划分下，给每个站一个<strong>随机数</strong>比真卫星图还好用。</p>
+    </div>
+    <div class="vcard">
+      <span class="tag">定位</span>
+      <p>城内确实存在一个真实但很弱的信号 <code>ρ≈0.15</code>（解释率 2%）。它的<strong>尺度</strong>已定位在 380m，但<strong>成分</strong>只完成排除——不是地理位置，也不是土地利用；剩下最可能指向微观建成形态，尚未直接测量。</p>
+    </div>
+  </div>
+</div>
+
+<section>
+  <h2><span class="sec">A</span>决定性证据</h2>
+
+  <div class="exp">
+    <div class="exp-hd"><span class="eid">E1</span><h3>站身份记忆——「图像有用」可能是划分伪影</h3></div>
+    <p class="dim" style="font-size:var(--fs-small)">站点各只有一张图，图向量在 station-week 面板里<em>逐站恒定</em>。若按 <em>station-week 行</em>随机划分，同一站的图同时出现在训练与测试中，任何可训练映射都能记住该站水平、在测试周复读——等价于站固定效应。</p>
+    <div class="tw">
+      <table>
+        <caption>同划分、同 alpha 流程下，真卫星图 vs 随机 per-station 码（Spearman）</caption>
+        <thead><tr><th>城市</th><th>目标</th><th class="num">真卫星图</th><th class="num">随机替身码</th></tr></thead>
+        <tbody>
+          <tr><td>JHB</td><td>duration</td><td class="num">0.592</td><td class="num nul">0.600</td></tr>
+          <tr><td>MEL</td><td>duration</td><td class="num">0.310</td><td class="num nul">0.324</td></tr>
+          <tr><td>LOA</td><td>duration</td><td class="num">0.747</td><td class="num nul">0.932</td></tr>
+          <tr><td>LOA</td><td>volume</td><td class="num">0.588</td><td class="num nul">0.758</td></tr>
+          <tr><td>MEL</td><td>volume</td><td class="num">0.655</td><td class="num nul">0.731</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="finding">五格中<em>全部</em>是随机码 ≥ 真图。另有更直接的一格：把图像加到「站训练均值」上，<code>A_sta + img</code> 与 <code>A_sta</code> <em>三位小数逐位相等</em>——图像在站均值之外贡献恰好为零。</p>
+  </div>
+
+  <div class="exp">
+    <div class="exp-hd"><span class="eid">E2</span><h3>换成 leave-station-out（新站部署的真实设定）</h3></div>
+    <p class="dim" style="font-size:var(--fs-small)">站身份记忆在真实场景下不可用——新站没有历史。改用留站划分后，城内信号<em>是真的</em>，但跨城<em>不显著</em>。</p>
+    <div class="tw">
+      <table>
+        <caption>逐折 Spearman 均值 · crop192（≈380m）· 20 个划分种子</caption>
+        <thead><tr><th>设定</th><th class="num">ρ</th><th class="num">p</th><th>备注</th></tr></thead>
+        <tbody>
+          <tr class="hi"><td>LOA 城内</td><td class="num pos">+0.146</td><td class="num">—</td><td><span class="sub">±0.024，20/20 种子为正，置换 z≈5.7</span></td></tr>
+          <tr><td>LOA → MEL</td><td class="num">+0.121</td><td class="num">0.339</td><td><span class="sub">n=60</span></td></tr>
+          <tr><td>LOA → JHB</td><td class="num">+0.239</td><td class="num">0.153</td><td><span class="sub">n=32</span></td></tr>
+          <tr class="hi-lo"><td>LOA → MEL∪JHB</td><td class="num nul">−0.067</td><td class="num">0.487</td><td><span class="sub">合并目标</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="finding neg">正的但不显著。<code>ρ=0.15</code> 要检出需 <em>~370 个站</em>——等于不可用。</p>
+  </div>
+
+  <div class="exp">
+    <div class="exp-hd"><span class="eid">E4</span><h3>被免费元数据碾压</h3></div>
+    <p class="dim" style="font-size:var(--fs-small)"><code>charger_num</code>（站点桩数）是已知的基础设施元数据：不需要历史、不需要图、任何城市都查得到。</p>
+    <div class="tw">
+      <table>
+        <caption>逐折 Spearman / R² / RMSE（目标 = log 周均量；均值基线 RMSE = 1.012）</caption>
+        <thead><tr><th>特征</th><th class="num">维度</th><th class="num">ρ</th><th class="num">R²</th><th class="num">RMSE</th></tr></thead>
+        <tbody>
+          <tr class="hi"><td>仅 charger_num</td><td class="num">1</td><td class="num pos">+0.761</td><td class="num">+0.414</td><td class="num">0.770 <span class="sub">省 23.9%</span></td></tr>
+          <tr><td>仅卫星图 380m</td><td class="num">768</td><td class="num">+0.146</td><td class="num">+0.001</td><td class="num">1.005 <span class="sub">省 0.6%</span></td></tr>
+          <tr class="hi-lo"><td>卫星图 + charger_num</td><td class="num">769</td><td class="num nul">+0.698</td><td class="num">—</td><td class="num"><span class="sub">比单用桩数还差</span></td></tr>
+          <tr><td>随机码 + charger_num</td><td class="num">17</td><td class="num">+0.646</td><td class="num">—</td><td class="num">—</td></tr>
+          <tr><td>随机码（容量对照）</td><td class="num">16</td><td class="num nul">−0.039</td><td class="num">—</td><td class="num">—</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <figure class="figbox">
+      <svg viewBox="0 0 560 200" role="img" aria-label="各特征单独预测需求的 Spearman 相关：桩数 0.761，卫星图 0.146，随机码 −0.039">
+        <g font-family="IBM Plex Mono, monospace" font-size="11">
+          <line x1="202" y1="18" x2="202" y2="182" stroke="var(--rule-2)" stroke-width="1"/>
+          <line x1="291" y1="18" x2="291" y2="182" stroke="var(--rule)" stroke-width="1"/>
+          <line x1="381" y1="18" x2="381" y2="182" stroke="var(--rule)" stroke-width="1"/>
+          <text x="202" y="196" fill="var(--muted)" text-anchor="middle" font-size="10">0</text>
+          <text x="291" y="196" fill="var(--muted)" text-anchor="middle" font-size="10">0.3</text>
+          <text x="381" y="196" fill="var(--muted)" text-anchor="middle" font-size="10">0.6</text>
+          <text x="551" y="196" fill="var(--muted)" text-anchor="end" font-size="10">ρ</text>
+
+          <text x="0" y="40" fill="var(--ink)">charger_num</text>
+          <rect x="202" y="28" width="227" height="16" fill="var(--teal)"/>
+          <text x="436" y="40" fill="var(--teal)" font-weight="600">+0.761</text>
+
+          <text x="0" y="72" fill="var(--ink)">卫星图 + 桩数</text>
+          <rect x="202" y="60" width="208" height="16" fill="var(--clay)" opacity="0.5"/>
+          <text x="417" y="72" fill="var(--clay)" font-weight="600">+0.698</text>
+
+          <text x="0" y="104" fill="var(--ink)">随机码 + 桩数</text>
+          <rect x="202" y="92" width="192" height="16" fill="var(--muted)" opacity="0.4"/>
+          <text x="401" y="104" fill="var(--muted)" font-weight="600">+0.646</text>
+
+          <text x="0" y="136" fill="var(--ink)">仅卫星图 380m</text>
+          <rect x="202" y="124" width="44" height="16" fill="var(--muted)" opacity="0.75"/>
+          <text x="253" y="136" fill="var(--ink-2)" font-weight="600">+0.146</text>
+
+          <text x="0" y="168" fill="var(--ink)">随机码（对照）</text>
+          <rect x="190" y="156" width="12" height="16" fill="var(--clay)"/>
+          <text x="183" y="168" fill="var(--clay)" font-weight="600" text-anchor="end">−0.039</text>
+        </g>
+      </svg>
+      <figcaption>单独预测需求的 Spearman 相关。桩数 1 维 > 卫星图 768 维约 5 倍；叠加图像反而稀释。</figcaption>
+    </figure>
+  </div>
+</section>
+
+<section>
+  <h2><span class="sec">B</span>那个信号在哪儿、不是什么</h2>
+  <p class="dim" style="font-size:var(--fs-small)">这一节只做两件事：确定信号的<em>尺度</em>，以及用排除法确定它<em>不是</em>什么。剩下的最可能选项——微观建成形态——<em>尚未直接测量</em>。</p>
+
+  <div class="exp">
+    <div class="exp-hd"><span class="eid">E3</span><h3>视野是隐藏变量——380m 才有信号</h3></div>
+    <p class="dim" style="font-size:var(--fs-small)">我能拿到的瓦片是 z16（≈1.98 m/px），中心裁剪到 192px 恰好覆盖 ≈380m，与 VisionEV 的视野对齐。</p>
+    <div class="tw">
+      <table>
+        <caption>裁剪扫描 · sklearn Ridge α=10</caption>
+        <thead><tr><th>裁剪</th><th class="num">地面视野</th><th class="num">ρ</th><th class="num">p</th></tr></thead>
+        <tbody>
+          <tr class="hi"><td>192 px</td><td class="num">0.38 km</td><td class="num pos">+0.165</td><td class="num">0.016</td></tr>
+          <tr><td>288 px</td><td class="num">0.57 km</td><td class="num">+0.115</td><td class="num">0.087</td></tr>
+          <tr><td>448 px</td><td class="num">0.89 km</td><td class="num">+0.122</td><td class="num">0.064</td></tr>
+          <tr><td>640 px</td><td class="num">1.27 km</td><td class="num">+0.083</td><td class="num">0.213</td></tr>
+          <tr class="hi-lo"><td>1280 px</td><td class="num">2.53 km</td><td class="num nul">−0.001</td><td class="num">0.994</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <figure class="figbox">
+      <svg viewBox="0 0 560 232" role="img" aria-label="视野扫描：192px 裁剪 ρ 为 0.165，随视野扩大单调下降到 1280px 的 −0.001">
+        <g font-family="IBM Plex Mono, monospace" font-size="11">
+          <line x1="70" y1="174.19" x2="540" y2="174.19" stroke="var(--rule-2)" stroke-width="1"/>
+          <line x1="70" y1="134.67" x2="540" y2="134.67" stroke="var(--rule)" stroke-width="1"/>
+          <line x1="70" y1="95.14" x2="540" y2="95.14" stroke="var(--rule)" stroke-width="1"/>
+          <line x1="70" y1="55.62" x2="540" y2="55.62" stroke="var(--rule)" stroke-width="1"/>
+          <line x1="70" y1="24" x2="540" y2="24" stroke="var(--rule)" stroke-width="1"/>
+
+          <text x="62" y="178" fill="var(--muted)" text-anchor="end" font-size="10">0</text>
+          <text x="62" y="138" fill="var(--muted)" text-anchor="end" font-size="10">0.05</text>
+          <text x="62" y="99" fill="var(--muted)" text-anchor="end" font-size="10">0.10</text>
+          <text x="62" y="59" fill="var(--muted)" text-anchor="end" font-size="10">0.15</text>
+          <text x="62" y="28" fill="var(--muted)" text-anchor="end" font-size="10">ρ</text>
+
+          <rect x="90" y="43.76" width="54" height="130.43" fill="var(--teal)"/>
+          <text x="117" y="36.8" fill="var(--teal)" font-weight="600" text-anchor="middle">+0.165</text>
+
+          <rect x="184" y="83.29" width="54" height="90.9" fill="var(--muted)" opacity="0.55"/>
+          <text x="211" y="76.3" fill="var(--muted)" font-weight="600" text-anchor="middle">+0.115</text>
+
+          <rect x="278" y="77.75" width="54" height="96.44" fill="var(--muted)" opacity="0.55"/>
+          <text x="305" y="70.8" fill="var(--muted)" font-weight="600" text-anchor="middle">+0.122</text>
+
+          <rect x="372" y="108.58" width="54" height="65.61" fill="var(--muted)" opacity="0.35"/>
+          <text x="399" y="101.6" fill="var(--muted)" font-weight="600" text-anchor="middle">+0.083</text>
+
+          <rect x="466" y="174.19" width="54" height="2.5" fill="var(--clay)"/>
+          <text x="493" y="190" fill="var(--clay)" font-weight="600" text-anchor="middle">−0.001</text>
+
+          <text x="117" y="212" fill="var(--muted)" text-anchor="middle" font-size="10">192px</text>
+          <text x="211" y="212" fill="var(--muted)" text-anchor="middle" font-size="10">288px</text>
+          <text x="305" y="212" fill="var(--muted)" text-anchor="middle" font-size="10">448px</text>
+          <text x="399" y="212" fill="var(--muted)" text-anchor="middle" font-size="10">640px</text>
+          <text x="493" y="212" fill="var(--muted)" text-anchor="middle" font-size="10">1280px</text>
+          <text x="117" y="226" fill="var(--muted)" text-anchor="middle" font-size="10">0.38km</text>
+          <text x="211" y="226" fill="var(--muted)" text-anchor="middle" font-size="10">0.57km</text>
+          <text x="305" y="226" fill="var(--muted)" text-anchor="middle" font-size="10">0.89km</text>
+          <text x="399" y="226" fill="var(--muted)" text-anchor="middle" font-size="10">1.27km</text>
+          <text x="493" y="226" fill="var(--muted)" text-anchor="middle" font-size="10">2.53km</text>
+        </g>
+      </svg>
+      <figcaption>裁剪扫描：地面视野越大信号越弱，整城尺度归零。192px 一档 p=0.016，1280px 一档 p=0.994。</figcaption>
+    </figure>
+    <p class="finding">用大裁剪（整城尺度）的流水线<em>测的是零</em>。VisionEV 用 380m 视野恰是信号最强的尺度。</p>
+  </div>
+
+  <div class="exp">
+    <div class="exp-hd"><span class="eid">E6</span><h3>不是空间泄漏，也不是地理位置代理</h3></div>
+    <div class="tw">
+      <table>
+        <caption>剔除测试站周边的训练站 · ρ</caption>
+        <thead><tr><th>剔除半径</th><th class="num">ρ</th><th>对照</th></tr></thead>
+        <tbody>
+          <tr><td>0 m（不剔）</td><td class="num">+0.147</td><td><span class="sub">基线</span></td></tr>
+          <tr><td>500 m</td><td class="num">+0.155</td><td><span class="sub">不变</span></td></tr>
+          <tr><td>1000 m</td><td class="num">+0.152</td><td><span class="sub">不变</span></td></tr>
+          <tr><td>2000 m</td><td class="num">+0.143</td><td><span class="sub">不变</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="finding">同时，地理 kNN 是<em>负</em>的（1/3/5/10-NN：−0.150 / −0.187 / −0.143 / −0.142，p 均 &lt; 0.05）——邻居站需求反向相关（充电站互相分流）。<em>图像的信号方向与地理位置相反</em>，所以它不是位置代理。</p>
+  </div>
+
+  <div class="exp">
+    <div class="exp-hd"><span class="eid">E7</span><h3>不是土地利用——我用自己最想证明的假设做了证伪</h3></div>
+    <p class="dim" style="font-size:var(--fs-small)">我原本假设「图像 ≈ 土地利用 one-hot」，若成立则 VisionEV 的 1.20 消融是虚高的。用 OSM POI 导出的土地利用特征直接测，<em>假设不成立</em>。</p>
+    <div class="tw">
+      <table>
+        <caption>三段独立测量（LOA，留站划分，20 种子）</caption>
+        <thead><tr><th>测什么</th><th class="num">结果</th><th>读法</th></tr></thead>
+        <tbody>
+          <tr><td>图像 → 重建土地利用</td><td class="num pos">ρ ≈ +0.26 / +0.29</td><td><span class="sub">4/4 类为正，随机码 ≈ 0</span></td></tr>
+          <tr><td>土地利用 → 需求</td><td class="num nul">−0.129 ~ −0.166</td><td><span class="sub">城内为负；跨城 ≈ 0</span></td></tr>
+          <tr class="hi"><td>剔除土地利用成分后的图像</td><td class="num pos">+0.083</td><td><span class="sub">对照单用图像 +0.070，<b>保留 120%</b></span></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="finding neg">三条同时为真只能推出一个结论：<em>图像确实是土地利用传感器，但土地利用不是需求的预测器，所以图像那点需求信号不可能来自土地利用。</em>我的原假设被证伪，不能用作对 VisionEV 的批评。</p>
+  </div>
+</section>
+
+<section>
+  <h2><span class="sec">C</span>逃生口排查</h2>
+
+  <div class="exp">
+    <div class="exp-hd"><span class="eid">E5</span><h3>不能减少所需历史</h3></div>
+    <div class="tw">
+      <table>
+        <caption>新城 K 个标注站 → 预测其余站 · ρ（LOA）</caption>
+        <thead><tr><th class="num">K</th><th class="num">图像 ridge</th><th class="num">标注站均值基线</th><th class="num">增量</th></tr></thead>
+        <tbody>
+          <tr><td class="num">10</td><td class="num">−0.101</td><td class="num">−0.102</td><td class="num nul">0.001</td></tr>
+          <tr><td class="num">20</td><td class="num">−0.083</td><td class="num">−0.085</td><td class="num nul">0.002</td></tr>
+          <tr><td class="num">40</td><td class="num">−0.028</td><td class="num">−0.033</td><td class="num nul">0.005</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="finding neg">768 维在 K 个点上直接爆炸。<em>图像 ridge ≈ 直接取均值</em>，增量恒为 0。MEL / JHB 同型（差 ≤ 0.003）。</p>
+  </div>
+
+  <div class="exp">
+    <div class="exp-hd"><span class="eid">E8</span><h3>端到端微调挖不出更多</h3></div>
+    <div class="tw">
+      <table>
+        <caption>leave-station-out · 四档解冻深度 · 预留判据：real 需同时 R²&gt;0 且 R²&gt;frozen</caption>
+        <thead><tr><th>变体</th><th class="num">ρ</th><th class="num">p</th></tr></thead>
+        <tbody>
+          <tr><td>只训 head</td><td class="num">+0.029</td><td class="num">0.68</td></tr>
+          <tr><td>末 2 block</td><td class="num">+0.001</td><td class="num">0.98</td></tr>
+          <tr><td>末 6 block</td><td class="num">+0.058</td><td class="num">0.38</td></tr>
+          <tr><td>全量解冻</td><td class="num">+0.132</td><td class="num">0.048</td></tr>
+          <tr class="hi"><td>frozen + ridge</td><td class="num pos">+0.148</td><td class="num">0.026</td></tr>
+          <tr><td>shuffled-label 对照</td><td class="num nul">−0.008</td><td class="num">0.91</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="finding neg">四档解冻<em>全部</em>没打败冻结特征 + 岭回归。预注册判据在任何一档都未满足——「需要任务重塑的表征」这个逃生口关闭。</p>
+  </div>
+</section>
+
+<section>
+  <h2><span class="sec">D</span>VisionEV 消融的结构性缺口</h2>
+  <p class="dim" style="font-size:var(--fs-small)">它的「图像作用」用的是 <em>self-ablation</em>：Table 4 五行全是同一个 PaliGemma-3B，唯一差别是拿掉哪个部件。卫星图的贡献 = <code>VisionEV − w/o Satellite Image</code>。这个设计在控制变量上确实干净，但有三个缺口。</p>
+  <div class="tw">
+    <table>
+      <caption>Table 4 摘录（RMSE）</caption>
+      <thead><tr><th>变体</th><th class="num">Full</th><th class="num">Few</th><th class="num">Zero</th><th class="num">Mean</th></tr></thead>
+      <tbody>
+        <tr><td>w/o Satellite Image</td><td class="num">3.29</td><td class="num">3.87</td><td class="num nul">4.68</td><td class="num">3.95</td></tr>
+        <tr><td>VisionEV</td><td class="num">2.87</td><td class="num">3.30</td><td class="num">3.48</td><td class="num">3.22</td></tr>
+        <tr class="hi"><td>Δ RMSE</td><td class="num">0.42</td><td class="num">0.57</td><td class="num pos">1.20</td><td class="num">0.73</td></tr>
+        <tr><td>Δ MAE</td><td class="num">0.43</td><td class="num">0.57</td><td class="num">0.67</td><td class="num">0.55</td></tr>
+        <tr><td>ΔRMSE / ΔMAE</td><td class="num">0.98</td><td class="num">1.00</td><td class="num nul">1.79</td><td class="num">—</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="callout">
+    <div class="ct">三个缺口</div>
+    <ul>
+      <li><strong>没有纯表格地板。</strong>Table 4 里没有任何非视觉模型。而 Full-shot 同档比较下，去图版 3.29 <em>差于</em> LightGBM 的 2.90——图像的贡献是把这个多模态架构从「不如 GBDT」拉回「和 GBDT 打平」，不是「图像优于表格特征」。</li>
+      <li><strong>Zero 是四档平均，不是单次。</strong>4.3.3 说是 20 / 40 / 60 / 80% 站点作训练源的<em>平均</em>，难度跨度 RMSE 3.18–3.98。逐档的 w/o-image 数字<em>未报</em>，无法判断增益落在哪一档。</li>
+      <li><strong>Zero 的增益是尾部驱动。</strong>Full/Few 两档 ΔRMSE ≈ ΔMAE（整体平移），Zero 档 ΔRMSE 是 ΔMAE 的 <em>1.79 倍</em>——说明图像让<em>少数站的离谱错误</em>变少，而非普遍提升。1.20 是平均，把这个局部现象摊到了所有站上。</li>
+    </ul>
+  </div>
+  <p class="note">注：我曾拿「去图 4.68」与「LightGBM 4.19」直接比较（差 0.49）——那是<em>四档平均比单档</em>，不成立，已收回。可用的等价比较只有 Full-shot 那一行。</p>
+</section>
+
+<section>
+  <h2><span class="sec">E</span>我修正过的判断</h2>
+  <p class="dim" style="font-size:var(--fs-small)">这条线上我犯过并已更正的三处，以及一处数据局限。列出是为了让结论的可信度可被检验。</p>
+  <div class="callout">
+    <div class="ct">更正记录</div>
+    <ul>
+      <li><strong>「视野 / 分辨率不是瓶颈，可零成本复现该视角」</strong> —— 错。复现后视野恰是那个从 0 变成 +0.15 的变量，2.5km 全图是零。</li>
+      <li><strong>「frozen +0.148 是预处理噪声」</strong> —— 错。20 个划分种子 20/20 为正，置换 z≈5.7，是真信号。</li>
+      <li><strong>「图像 ≈ 土地利用 one-hot，故 VisionEV 的消融虚高」</strong> —— 在 CHARGED 上被证伪（见 E7），不能作为批评。</li>
+      <li><strong>技术根因</strong>：L2 归一化后各站 DINOv2 嵌入的均值方向范数 = <code>0.886</code>（上限 1.0），真实差异藏在 ~11% 残差里。做此类探针<em>必须用带截距的回归</em>，否则会被共同方向主导而退化成 ρ≈−0.02。</li>
+    </ul>
+  </div>
+  <div class="callout">
+    <div class="ct">数据局限</div>
+    <ul>
+      <li>POI 覆盖度跨城严重不对称：<code>other</code> 占比 LOA 52.9% / MEL 84.6% / JHB 87.0%。跨城的 POI 结论弱，城内结论强。</li>
+      <li>我用的是 OSM POI <em>计数</em>，VisionEV 用的是<em>地块土地利用面积标签</em>——「代理的代理」。</li>
+      <li>分辨率差 8.5 倍：我 1.98 m/px（z16）vs VisionEV 0.23 m/px（z19）。视野对齐了，清晰度没有。若要把否定结论写成论文，这是必须先堵的漏洞。</li>
+    </ul>
+  </div>
+</section>
+
+<section>
+  <h2><span class="sec">F</span>待定 · 请学长定夺</h2>
+  <div class="qs">
+    <div class="q">
+      <div class="qh"><span>01</span>跨城零样本卫星图迁移</div>
+      <p>CHARGED 上判负，我建议停止推进。信号真实存在但量级 ρ≈0.15、跨城不显著、且被免费元数据完全覆盖——没有可做的增量空间。</p>
+    </div>
+    <div class="q">
+      <div class="qh"><span>02</span>是否转向否定性 / 方法学论文</div>
+      <p>手上有成体系的否定证据：站身份陷阱（E1）+ 视野敏感（E3）+ 自由元数据碾压（E4）+ 消融结构缺口（D）。故事是「文献为何会看错卫星图的作用」。前提是先花一轮补 z19 堵分辨率漏洞。</p>
+    </div>
+    <div class="q">
+      <div class="qh"><span>03</span>还是换问题</div>
+      <p>若认为否定性结论不适合目标期刊，则卫星这条线整体搁置，回到主线（Kairos L2 / Agent 方向）。</p>
+    </div>
+    <div class="q">
+      <div class="qh"><span>04</span>VisionEV 逐档复现</div>
+      <p>可复现它的 20/40/60/80% 划分并补上逐档 w/o-image 数字，看 1.20 增益落在哪一档。这是可做的验证，但验证的是<em>它的</em>结论，不是我们的方向——优先级取决于 02 是否推进。</p>
+    </div>
+  </div>
+</section>
+
+<footer>CHARGED · 6 城数据 · 主实验城市 LOA (n=221) / MEL / JHB · 全部指标为逐折 Spearman 均值，20 个划分种子</footer>
+
+</div>
