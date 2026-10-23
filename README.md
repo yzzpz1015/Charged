@@ -77,6 +77,7 @@ crpsΣ = 先按站算 CRPS，再对站取平均、按训练期站均值归一化
 |---|---|---|
 | 源代码 | [`github.com/yzzpz1015/Charged`](https://github.com/yzzpz1015/Charged) | 不含 `data/`、`result/`、权重 |
 | 数据集 | HF Dataset [`yzzpz/Charged-data`](https://huggingface.co/datasets/yzzpz/Charged-data) | 原始 6 城 + `_remove_zero` 版本 + `tiles_dataset/` |
+| 训练权重 | HF Model [`yzzpz/Charged-checkpoints`](https://huggingface.co/yzzpz/Charged-checkpoints) | ①③④⑤ 的 checkpoint（按 `result/` 子目录组织） |
 | 主干权重 | `mldi-lab/Kairos_23m` | 训练时经 `--checkpoint` 自动下载 |
 | 历史多模态权重 | GPT-2 / SigLIP v2 | 仅旧多模态线需要，概率主线不需要 |
 
@@ -114,7 +115,12 @@ python3 script/filter_constant_sites.py
 
 > 注意：`result/timediff_clean/` 是 future-mixup 版，采样崩塌（MPIW50 0.02），**不要用于复现或对比**。
 
-如需对外共享权重，建议使用独立的 HF **model** repo（不要混进 dataset repo）；当前 README 暂无对应链接。
+从 HF 取回权重（仓库内的目录名与 `result/` 下一致）：
+
+```bash
+# 直连慢时加：export HF_ENDPOINT=https://hf-mirror.com
+hf download yzzpz/Charged-checkpoints --repo-type model --local-dir result
+```
 
 ### 环境
 
