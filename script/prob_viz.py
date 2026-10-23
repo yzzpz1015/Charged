@@ -79,7 +79,7 @@ def collect(city, j, n_cell, seed, device, mask_mode="clf", ts=None):
     SEQ_L 小时，是"滚动的一天前预报"）。中间若撞上停摆缺口，窗口会跳号，
     画的时候按真实时间戳落点，缺口会自己显出来。
     """
-    OUT_ROOT = f"{BASE}/result/kairos_l1"
+    OUT_ROOT = os.environ.get("KAIROS_CKPT_ROOT", f"{BASE}/result/kairos_l1")
     rng = np.random.default_rng(seed)
 
     ds, raw, starts = ke.load_city(city)

@@ -37,7 +37,7 @@ import json
 import numpy as np
 import pandas as pd
 
-BASE = "/home/data/yzzpz/Charged"
+BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CITIES = ["LOA", "MEL", "JHB", "AMS", "SPO", "SZH"]
 FEATURE = "volume"
 HORIZONS = [24, 48, 72]

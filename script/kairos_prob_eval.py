@@ -41,7 +41,7 @@ import numpy as np
 import pandas as pd
 import torch
 
-BASE = "/home/data/yzzpz/Charged"
+BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, BASE)
 
 from api.dataset.common import EVDataset, SPLIT_TRAIN, SPLIT_VALID, SPLIT_TEST  # noqa: E402
