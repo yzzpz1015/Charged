@@ -215,8 +215,12 @@ class GWNet(nn.Module):
             supports.append(adaptive)
         return supports
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """x: [B, N, T] or [B, C, N, T]."""
+    def forward(self, x: torch.Tensor, return_hidden: bool = False) -> torch.Tensor:
+        """x: [B, N, T] or [B, C, N, T]。
+
+        ``return_hidden=True`` 时返回最后时间步的 hidden ``[B, N, nhid]``，供
+        分位头（``GWNetQuant``）复用；默认行为不变。
+        """
         if x.dim() == 3:
             x = x.unsqueeze(1)  # [B, 1, N, T]
         elif x.dim() != 4:
@@ -239,6 +243,9 @@ class GWNet(nn.Module):
         x = self.end_conv1(x)
         x = self.relu(x)
         x = self.dropout(x)
+        if return_hidden:
+            # [B, nhid, N, T] -> 最后时间步 -> [B, N, nhid]
+            return x[:, :, :, -1].permute(0, 2, 1)
         x = self.end_conv2(x)
 
         # [B, pred_len, N, T] -> take the last time step after causal stack
