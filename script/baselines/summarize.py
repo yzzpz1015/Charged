@@ -13,6 +13,8 @@ import json
 import os
 import sys
 
+import numpy as np
+
 BASE = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 ROOT = os.path.join(BASE, "result", "baselines", "metrics")
 CITIES = ["LOA", "JHB", "MEL", "SPO", "SZH"]
@@ -41,7 +43,41 @@ def main():
     ap.add_argument("--metric", default="crps_norm_sum")
     ap.add_argument("--markdown", action="store_true")
     ap.add_argument("--methods", default="", help="逗号分隔，默认全部")
+    ap.add_argument("--seeds", default="",
+                    help="逗号分隔；给出时输出 mean±std（按可用 seed 聚合）")
     args = ap.parse_args()
+    if args.seeds:
+        seeds = [int(x) for x in args.seeds.split(",")]
+        tabs = {s: load(s, args.metric) for s in seeds}
+        tab = tabs[seeds[0]]
+        methods = sorted({k[0] for t in tabs.values() for k in t})
+        if args.methods:
+            keep = set(args.methods.split(","))
+            methods = [m for m in methods if m in keep]
+        w = max(len(m) for m in methods) + 2
+        print(f"metric = {args.metric}, seeds = {seeds} (mean±std)")
+        print("method".ljust(w) + "  ".join(f"{c:>26}" for c in CITIES))
+        for m in methods:
+            row = m.ljust(w)
+            for c in CITIES:
+                cells = []
+                for h in HORIZONS:
+                    vals = [tabs[s][(m, c, h)] for s in seeds if (m, c, h) in tabs[s]]
+                    if not vals:
+                        cells.append(f"{'—':>8}")
+                    elif len(vals) == 1:
+                        cells.append(f"{mark(*vals[0], c):>8}")
+                    else:
+                        arr = np.array([v[0] for v in vals], dtype=float)
+                        cell = f"{arr.mean():.4f}±{arr.std():.4f}"
+                        if any(int(v[1].get('n_test_windows', -1)) < EXPECT_W.get(c, 0)
+                               for v in vals):
+                            cell += "*"
+                        cells.append(cell)
+                row += "  ".join(cells) + "    "
+            print(row)
+        print("\n* = 至少一个 seed 的测试窗数少于该城全量")
+        return
     tab = load(args.seed, args.metric)
     methods = sorted({k[0] for k in tab})
     if args.methods:
