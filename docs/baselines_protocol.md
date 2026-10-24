@@ -94,7 +94,11 @@
 9. **三个扩散 baseline 均为「按原论文结构重写、采样加速」**，不是官方代码：
    * TimeGrad：原版逐步自回归（每步一个扩散），这里是 GRU 历史编码 + 72 步联合扩散（非自回归）；
    * TSDiff：原版 soft self-guidance（观测一致性梯度），这里是 DDIM 每步把历史段硬投影回真值；不做 unconditional 预训练；
-   * DiffSTG：原版 UGnet，这里是「GRU 历史编码 + 时间膨胀 conv + 稀疏 kNN 图聚合 + 时间 FiLM」轻量堆叠。历史条件必须读完整序列：早期版本用「历史特征的时间均值」，在 RevIN 后均值≈0，模型拿不到当前所处周期位置，退化为预测窗口均值（JHB 实测 E[q]/target=0.67、PICP90=0.45），该版本结果已移到 `result/baselines/archive_meancond_v1/`，不进主表。
+   * DiffSTG：原版 UGnet，这里是「GRU 历史编码 + 时间膨胀 conv + 稀疏 kNN 图聚合 + 时间/历史双 FiLM」轻量堆叠。历史条件经过两轮修正：
+     - v1 用「历史特征的时间均值」作条件。RevIN 后均值≈0，模型拿不到当前周期位置，退化为预测窗口均值（JHB E[q]/target=0.67、PICP90=0.45）。
+     - v2 改为 GRU 末状态，但只在输入层加一次；去噪 block 内没有历史条件，ε 仍学不动（JHB 测试窗 t=100 的 ε-MSE 0.89，TimeGrad/TSDiff≈0.23）。
+     - v3 在**每个 block 用历史条件做 FiLM**（时间 FiLM + 历史 FiLM 相加），JHB 恢复校准（crpsΣ 0.3201、PICP90 0.922、E[q]/target 0.88）。主表只用 v3。
+     - v1/v2 结果已移到 `result/baselines/archive_meancond_v1/` 与 `archive_diffstg_v2/`，不进主表。
    表注必须写明这三条，不能当作官方实现对比。
 10. **MQ-CNN 无 static station embedding**：原版用站点类别 embedding，这里与 #7–#10 同输入（只有 72h 历史）；结构与损失为 MQ-CNN 的因果空洞 CNN + 分位头。
 11. **#20 UniST 未做**：官方实现是 **grid（图像张量）** 模型，且依赖大规模跨场景预训练 + 多模态侧信息；本数据的站级图结构与统一 72h 输入无法在不做实质改造的情况下接入。若必须补，需要按 UniFlow（graph 版）重做数据层与预训练，成本另计。
@@ -138,15 +142,16 @@ python3 script/baselines/summarize.py
 python3 script/baselines/summarize.py --markdown
 ```
 
-## 10. 当前状态（2026-10-24 22:05）
+## 10. 当前状态（2026-10-25 00:10）
 
-* **seed 0 已完成**：#7 iTransformer、#8 STGCN、#9 STGCN-nograph、#10 GWNet、#11 TFT、#12 DeepAR-ISQF、#13 MQ-CNN、#14 官方 CSDI、#18 Chronos-Bolt、#19 Moirai、#6 PatchTST+quant-pre72，#15 TimeGrad（LOA/JHB/MEL/SPO）、#16 TSDiff（MEL/JHB）。
-* **seed 0 进行中**：
-  * #15 TimeGrad SZH（全量 2125 窗，约 4 h）；
-  * #16 TSDiff LOA（全量）、SPO（排队）、SZH（等间隔 256 窗）；
-  * #17 DiffSTG v2 LOA（全量）、MEL/JHB、SPO（排队）、SZH（等间隔 256 窗）。
-* **seed 1 已完成**：iTransformer / MQ-CNN / PatchTST+quant-pre72（五城）；TFT 五城进行中。seed 间 H24 crpsΣ 差异 ≤2%（多城 <1%）。
-* **DeepAR StudentT 已弃用**：#12 主结果为 ISQF；StudentT 结果仅作“官方默认配置”参考，不进主表（其 SPO crpsΣ 0.867，明显退化）。
-* **#17 DiffSTG 口径变更**：v1（历史均值条件）产物已归档，主表统一用 v2（GRU 历史条件）。
-* **#20 UniST 未做**，原因见 §7.11。
-* 剩余待做：扩散类 seed 1/2（成本高，视主表是否需要 mean±std）；汇总表生成后补条件 CRPS 与 `crps_nz` 表。
+* #7 / #13 / #6（iTransformer / MQ-CNN / PatchTST+quant-pre72）：五城 seed 0/1/2 完成；#8–#10 STGCN / STGCN-nograph / GWNet 仅 seed 0（seed 2 未跑）。
+* #11 TFT：五城 seed 0 完成；seed 1 四城完成、SZH 进行中。
+* #12 DeepAR：主表用 ISQF 版本（`--distr isqf`），五城 seed 0 完成；StudentT 默认版本在多数城市退化（预测塌到 0，SPO crpsΣ 0.87），仅作参考、不进主表。
+* #13 MQ-CNN：五城 seed 0/1/2 完成。
+* #14 官方 CSDI：五城完成（LOA/JHB/MEL/SPO 256 窗，SZH 128 窗，`nsample=50`）。
+* #18/#19 Chronos-Bolt / Moirai：五城完成（确定性，单次）。
+* #6 pre72（PatchTST+quant）：五城 seed 0/1/2 完成。
+* #15 TimeGrad：LOA/JHB/MEL/SPO 完成，SZH 全量运行中。
+* #16 TSDiff：五城完成（SZH 为 256 窗子集），H24 crpsΣ LOA/JHB/MEL/SPO/SZH = 0.2701/0.2942/0.3516/0.5415/0.0889*。
+* #17 DiffSTG：v3（每 block 历史 FiLM）JHB/MEL/SPO 完成，H24 crpsΣ 0.3201 / 0.4294 / 0.6927（SPO 严重塌缩：PICP50 0.056、PICP90 0.384）；LOA 全量、SZH 256 窗运行中。v1/v2 已归档，不进主表。
+* #20 UniST：未实现（原因见 §7.11）。
