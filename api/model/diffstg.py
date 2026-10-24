@@ -31,19 +31,30 @@ class _STBlock(nn.Module):
                                dilation=(1, dilation))
         self.gconv = nn.Conv2d(ch, ch, 1)
         self.emb = nn.Linear(temb, 2 * ch)
+        # 历史条件逐 block FiLM：[B,ch,N,1] -> [B,2ch,N,1]。
+        # 只在输入层加一次条件会被后续 residual/conv 冲掉，实测 ε 学不动。
+        self.cemb = nn.Conv2d(ch, 2 * ch, 1)
         self.drop = nn.Dropout(dropout)
         nn.init.zeros_(self.emb.weight)
         nn.init.zeros_(self.emb.bias)
+        nn.init.zeros_(self.cemb.weight)
+        nn.init.zeros_(self.cemb.bias)
 
-    def forward(self, x, adj_sp, te):
+    def forward(self, x, adj_sp, te, cf=None):
         B, C, N, L = x.shape
         h = self.tconv(F.gelu(self.norm(x)))
         # 站间图聚合：[N, B*C*L] 左乘稀疏 A
         g = h.permute(2, 0, 1, 3).reshape(N, -1)
         g = torch.sparse.mm(adj_sp, g).view(N, B, C, L).permute(1, 2, 0, 3)
         h = h + self.gconv(g)
-        s, b = self.emb(te).chunk(2, -1)
-        h = F.gelu(h * (1.0 + s[:, :, None, None]) + b[:, :, None, None])
+        s, b = self.emb(te).chunk(2, -1)                # [B,ch]
+        s = s[:, :, None, None]
+        b = b[:, :, None, None]
+        if cf is not None:
+            sc, bc = self.cemb(cf).chunk(2, 1)           # [B,ch,N,1]
+            s = s + sc
+            b = b + bc
+        h = F.gelu(h * (1.0 + s) + b)
         return x + self.drop(h)
 
 
@@ -104,7 +115,7 @@ class DiffSTGModel(nn.Module):
         c = hn[-1].view(B, N, -1).permute(0, 2, 1).unsqueeze(-1)  # [B,d,N,1]
         h = self.inp(x_t) + c
         for blk in self.blocks:
-            h = blk(h, adj_sp, te)
+            h = blk(h, adj_sp, te, c)
         return self.out(F.gelu(self.out_norm(h)))
 
     def p_loss(self, x0: torch.Tensor, cond: torch.Tensor,
