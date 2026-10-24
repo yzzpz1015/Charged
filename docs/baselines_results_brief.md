@@ -65,4 +65,4 @@ python3 script/baselines/train_diffstg.py --city MEL --device 0
 python3 script/baselines/summarize.py
 ```
 
-权重与指标 JSON：HuggingFace [`yzzpz/Charged-checkpoints`](https://huggingface.co/yzzpz/Charged-checkpoints) 的 `baselines/` 目录。镜像上传偶发 502，已同步 iTransformer / STGCN / STGCN-nograph，其余权重与 metrics 正在重试。
+权重与指标 JSON：HuggingFace [`yzzpz/Charged-checkpoints`](https://huggingface.co/yzzpz/Charged-checkpoints) 的 `baselines/` 目录（`ckpt/{method}/{city}/seed{s}.pth`、`metrics/{method}/{city}/H*_seed{s}.json`）。当前已同步 12 组方法权重与全部已完成指标的 JSON；TimeGrad-SZH、DiffSTG-LOA/SZH 跑完后补传。
