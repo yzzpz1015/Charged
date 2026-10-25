@@ -33,6 +33,8 @@ crpsΣ = 先按站算 CRPS，再对站取平均、按训练期站均值归一化
 - `np.sort(Q)` 修分位交叉，保留为标准后处理；但它**不是收益来源**：在 16 窗 × 32 站的分层诊断子集上实测仅 −0.01%~−0.08%（四个 99 分位方法 × 五城），此前“−1.0%~−2.4%”的表述无法复现，已撤回。
 - AMS 测试期约 95.9% 的站数值冻结，**单列，不参与跨城平均**。
 
+补充 baseline（iTransformer / STGCN / Graph WaveNet / TFT / DeepAR / MQ-CNN / 官方 CSDI / TimeGrad / TSDiff / DiffSTG / Chronos-Bolt / Moirai 等）的统一协议、三 horizon 主表与校准诊断见 [`docs/baselines_protocol.md`](docs/baselines_protocol.md)。
+
 ### 主干 × 头消融（H=24，crpsΣ）
 
 | 城市 | PatchTST+池 | PatchTST+分位 | Kairos+分位（排序后） | Kairos+池 |

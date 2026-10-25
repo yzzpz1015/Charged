@@ -22,9 +22,9 @@ HORIZONS = ["H24", "H48", "H72"]
 EXPECT_W = {"LOA": 2125, "JHB": 2125, "MEL": 1781, "SPO": 2125, "SZH": 2125}
 
 
-def load(seed, metric):
+def load(seed, metric, root=None):
     out = {}
-    for p in glob.glob(os.path.join(ROOT, "*", "*", f"H*_seed{seed}.json")):
+    for p in glob.glob(os.path.join(root or ROOT, "*", "*", f"H*_seed{seed}.json")):
         with open(p) as f:
             d = json.load(f)
         out[(d["method"], d["city"], d["horizon"])] = (d[metric], d)
@@ -45,10 +45,14 @@ def main():
     ap.add_argument("--methods", default="", help="逗号分隔，默认全部")
     ap.add_argument("--seeds", default="",
                     help="逗号分隔；给出时输出 mean±std（按可用 seed 聚合）")
+    ap.add_argument("--tag", default="",
+                    help="读 metrics_{tag}/；如 point 读 metrics_point（点预测重评）")
     args = ap.parse_args()
+    root = os.path.join(BASE, "result", "baselines",
+                        "metrics" + (f"_{args.tag}" if args.tag else ""))
     if args.seeds:
         seeds = [int(x) for x in args.seeds.split(",")]
-        tabs = {s: load(s, args.metric) for s in seeds}
+        tabs = {s: load(s, args.metric, root) for s in seeds}
         tab = tabs[seeds[0]]
         methods = sorted({k[0] for t in tabs.values() for k in t})
         if args.methods:
@@ -78,7 +82,7 @@ def main():
             print(row)
         print("\n* = 至少一个 seed 的测试窗数少于该城全量")
         return
-    tab = load(args.seed, args.metric)
+    tab = load(args.seed, args.metric, root)
     methods = sorted({k[0] for k in tab})
     if args.methods:
         keep = set(args.methods.split(","))

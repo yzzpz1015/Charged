@@ -66,6 +66,78 @@ def _test_entries(raw, ds, starts):
     return out, meta
 
 
+def _fast_sample_chunk(predictor, entries, meta, M, N, chunk_w):
+    """DeepAR：直接调 network 取 [B,S,T] 样本，跳过逐条 SampleForecast。
+
+    数值口径与 ``predictor.predict`` 相同（同一 input_transform、同一 network、
+    network 内部自带反缩放）；只是 RNG 调用顺序不同，样本实现会变、分布不变。
+    """
+    from gluonts.dataset.common import ListDataset
+    from gluonts.dataset.loader import InferenceDataLoader
+    from gluonts.torch.batchify import batchify
+    from gluonts.transform import SelectFields
+
+    predictor.prediction_net.eval()
+    S = int(predictor.prediction_net.model.num_parallel_samples)
+    loader = InferenceDataLoader(
+        ListDataset(entries, freq=FREQ),
+        transform=predictor.input_transform + SelectFields(
+            predictor.input_names + predictor.required_fields, allow_missing=True),
+        batch_size=predictor.batch_size,
+        stack_fn=lambda d: batchify(d, predictor.device),
+    )
+    m0 = meta[0][0]
+    w = min(chunk_w, M - m0)
+    samp = np.empty((w, N, C.PRE_LEN, S), np.float32)
+    k = 0
+    with torch.no_grad():
+        for batch in loader:
+            inputs = {n: batch[n] for n in predictor.input_names if n in batch}
+            out = predictor.prediction_net(**inputs).detach().cpu().numpy()
+            for j in range(out.shape[0]):      # out[j]: [S, T]
+                m, n = meta[k]
+                samp[m - m0, n] = out[j].T      # -> [T, S]
+                k += 1
+    assert k == len(entries)
+    return m0, samp
+
+
+def _fast_quant_chunk(predictor, entries, meta, M, N, chunk_w, qs_np):
+    """直接调 prediction_net，跳过逐条 QuantileForecast 的 pydantic 开销。
+
+    与 ``predictor.predict`` 数值完全一致（同一 batch 下已逐元素对账，
+    max|Δ|=0）；只是不再为每个 (entry, quantile) 构造 Quantile 对象。
+    """
+    from gluonts.dataset.common import ListDataset
+    from gluonts.dataset.loader import InferenceDataLoader
+    from gluonts.torch.batchify import batchify
+    from gluonts.transform import SelectFields
+
+    loader = InferenceDataLoader(
+        ListDataset(entries, freq=FREQ),
+        transform=predictor.input_transform + SelectFields(
+            predictor.input_names + predictor.required_fields, allow_missing=True),
+        batch_size=predictor.batch_size,
+        stack_fn=lambda d: batchify(d, predictor.device),
+    )
+    predictor.prediction_net.eval()   # 与 predictor.predict 同步；否则 dropout 未关
+    m0 = meta[0][0]
+    w = min(chunk_w, M - m0)
+    Q = np.empty((w, N, C.PRE_LEN, len(qs_np)), np.float32)
+    k = 0
+    with torch.no_grad():
+        for batch in loader:
+            inputs = {n: batch[n] for n in predictor.input_names if n in batch}
+            out = predictor.prediction_net(**inputs).detach().cpu().numpy()
+            # TFT 输出 [B, Q, T]
+            for j in range(out.shape[0]):
+                m, n = meta[k]
+                Q[m - m0, n] = out[j].T
+                k += 1
+    assert k == len(entries)
+    return m0, Q
+
+
 def build_estimator(args, n_quant):
     from gluonts.torch.model.deepar import DeepAREstimator
     from gluonts.torch.model.tft import TemporalFusionTransformerEstimator
@@ -131,6 +203,12 @@ def main():
     ap.add_argument("--eval_batch_windows", type=int, default=8)
     ap.add_argument("--limit_test", type=int, default=0)
     ap.add_argument("--no_diag", action="store_true")
+    ap.add_argument("--eval_only", action="store_true",
+                    help="载入 seed{s}.pth 只重评；transform 是无状态链，可重建 predictor")
+    ap.add_argument("--predict_batch_size", type=int, default=0,
+                    help=">0 覆盖 predictor 推理 batch（只影响速度，不影响 TFT 结果）")
+    ap.add_argument("--slow_eval", action="store_true",
+                    help="TFT 走 predictor.predict（每条建 QuantileForecast，慢；用于对账）")
     args = ap.parse_args()
     # 结果目录名带分布标签，避免覆盖已判废的 StudentT 结果
     args.tag = args.method + ("_isqf" if args.method == "deepar"
@@ -157,12 +235,36 @@ def main():
     train_ds = ListDataset(train_data, freq=FREQ)
     valid_ds = ListDataset(valid_data, freq=FREQ)
     est = build_estimator(args, args.n_quant)
-    t0 = time.time()
-    predictor = est.train(train_ds, validation_data=valid_ds)
-    print(f"  trained in {time.time()-t0:.0f}s", flush=True)
-
     out_m, out_d, out_c = C.out_dirs(args.tag, args.city)
-    torch.save(predictor.network.state_dict(), os.path.join(out_c, f"seed{args.seed}.pth"))
+    ckpt = os.path.join(out_c, f"seed{args.seed}.pth")
+    t0 = time.time()
+    if args.eval_only:
+        if not os.path.exists(ckpt):
+            raise SystemExit(f"没有 checkpoint：{ckpt}")
+        module = est.create_lightning_module()
+        sd = torch.load(ckpt, map_location="cpu")
+        # checkpoint 存的是 predictor.network.state_dict()，而 predictor.network 就是
+        # LightningModule，所以 key 自带 "model." 前缀。
+        sd = {k[len("model."):]: v for k, v in sd.items()
+              if k.startswith("model.")}
+        module.model.load_state_dict(sd)
+        predictor = est.create_predictor(est.create_transformation(), module)
+        # create_predictor 固定 device="auto"（会落到 cuda:0，和其他任务抢卡）；
+        # 显式指到 --device。
+        predictor.device = C.torch_device(args.device)
+        predictor.prediction_net.to(predictor.device)  # __init__ 已按 auto 挪到 cuda:0
+        if args.predict_batch_size:
+            predictor.batch_size = args.predict_batch_size
+        print(f"  loaded {ckpt}（不重训）", flush=True)
+    else:
+        predictor = est.train(train_ds, validation_data=valid_ds)
+        # est.train 内部 create_predictor 固定 device="auto"（cuda:0），显式改到 --device
+        predictor.device = C.torch_device(args.device)
+        predictor.prediction_net.to(predictor.device)
+        if args.predict_batch_size:
+            predictor.batch_size = args.predict_batch_size
+        print(f"  trained in {time.time()-t0:.0f}s", flush=True)
+        torch.save(predictor.network.state_dict(), ckpt)
 
     te = starts["te"]
     if args.limit_test:
@@ -176,10 +278,30 @@ def main():
     t1 = time.time()
     for c0 in range(0, len(entries), per_chunk):
         c1 = min(c0 + per_chunk, len(entries))
-        fc = list(predictor.predict(
-            ListDataset(entries[c0:c1], freq=FREQ)))
         m0 = meta[c0][0]
         w = min(chunk_w, M - m0)
+        if args.method == "tft" and not args.slow_eval:
+            m0, Q = _fast_quant_chunk(predictor, entries[c0:c1], meta[c0:c1],
+                                      M, N, chunk_w, qs_np)
+            met.update_quantiles(m0, Q)
+            if (c0 // per_chunk) % 5 == 0:
+                done = min(c1 // N, M)
+                el = time.time() - t1
+                print(f"    {done}/{M} 窗  {el:.0f}s  ETA {el/max(done,1)*(M-done)/60:.0f}min",
+                      flush=True)
+            continue
+        if args.method == "deepar" and not args.slow_eval:
+            m0, S = _fast_sample_chunk(predictor, entries[c0:c1], meta[c0:c1],
+                                       M, N, chunk_w)
+            met.update_samples(m0, S)
+            if (c0 // per_chunk) % 5 == 0:
+                done = min(c1 // N, M)
+                el = time.time() - t1
+                print(f"    {done}/{M} 窗  {el:.0f}s  ETA {el/max(done,1)*(M-done)/60:.0f}min",
+                      flush=True)
+            continue
+        fc = list(predictor.predict(
+            ListDataset(entries[c0:c1], freq=FREQ)))
         if args.method == "deepar":
             S = np.empty((w, N, C.PRE_LEN, C.M_SAMPLE), np.float32)
             for k, f in enumerate(fc):

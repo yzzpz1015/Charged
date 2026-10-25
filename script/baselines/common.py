@@ -133,7 +133,9 @@ def flatten_windows(X, Y):
 # ------------------------------------------------------------------ 指标
 def _empty_acc():
     return dict(per_win=[], cs_sum=0.0, nz_sum=0.0, nz_win=0, nz_cells=0,
-                nz_den=0, n_scored=0, picp={}, mpiw={})
+                nz_den=0, n_scored=0, picp={}, mpiw={},
+                # 点预测（所有方法同口径）：预测分布的 τ=0.5（采样类取样本中位数）
+                pt_abs=0.0, pt_sse=0.0, pt_sy=0.0, pt_sy2=0.0, pt_n=0)
 
 
 class StreamingMetrics:
@@ -158,6 +160,9 @@ class StreamingMetrics:
         self.keep = np.asarray(keep)
         self.smean = np.asarray(smean, np.float64)
         self.qs = None if qs is None else np.asarray(qs, np.float64)
+        # τ=0.5 在分位网格上的浮点位置；非均匀网格（如 Chronos-Bolt）用线性插值。
+        self.q_mid = (None if self.qs is None
+                      else float(np.interp(0.5, self.qs, np.arange(len(self.qs)))))
         self.horizons = tuple(horizons)
         self.U = U
         self.u_ind = ke.strat_u(np.random.default_rng(0), U, raw.shape[1], shared=False)
@@ -170,15 +175,28 @@ class StreamingMetrics:
 
     # -- 输入 ---------------------------------------------------------
     def _samples_from_quant(self, qv):
-        """[N,Q] -> [U,N] 独立耦合。"""
-        qv = np.sort(qv, axis=-1)                  # 免费增益，与现有评测一致
+        """[N,Q] -> [U,N] 独立耦合。输入已按分位升序排好。"""
         return ke.quant_to_samples_ind(qv, self.qs, self.u_ind)
+
+    def _point_from_quant(self, qv):
+        """[N,72,Q]（已排序）-> τ=0.5 点预测 [N,72]。"""
+        lo = int(np.floor(self.q_mid))
+        hi = int(np.ceil(self.q_mid))
+        w = self.q_mid - lo
+        if hi == lo:
+            return qv[:, :, lo]
+        return qv[:, :, lo] * (1.0 - w) + qv[:, :, hi] * w
 
     def _update_one(self, m, pred72, samples=None):
         """pred72：分位类 [N,72,Q]；samples：采样类 [N,72,S]。"""
         mk = self.keep[m]
         if not mk.any():
             return
+        if samples is not None:
+            point72 = np.median(samples, axis=-1)       # [N,72]
+        else:
+            pred72 = np.sort(pred72, axis=-1)           # 免费增益，与现有评测一致
+            point72 = self._point_from_quant(pred72)
         for h, j in zip(self.horizons, JS):
             truth = self.raw[self.starts[m] + SEQ_L + j]
             if samples is not None:
@@ -199,6 +217,14 @@ class StreamingMetrics:
             for k, v in pb.pit_metrics(smp[:, mk], ym).items():
                 tgt = d["picp"] if k.startswith("picp") else d["mpiw"]
                 tgt[k] = tgt.get(k, 0.0) + v
+            # 点预测：与 kairos_prob_eval 同口径，跨窗跨站 pooled
+            pt, y = point72[mk, j], ym
+            e = pt - y
+            d["pt_abs"] += float(np.abs(e).sum())
+            d["pt_sse"] += float((e ** 2).sum())
+            d["pt_sy"] += float(y.sum())
+            d["pt_sy2"] += float((y ** 2).sum())
+            d["pt_n"] += int(mk.sum())
 
     def update_quantiles(self, m0, qv):
         qv = np.asarray(qv)
@@ -247,6 +273,8 @@ class StreamingMetrics:
                 raise AssertionError(
                     f"H={h} raw CRPS({raw_crps:.3g}) 比 MPIW50({mpiw50:.3g}) 小两个"
                     f"数量级以上，聚合口径有问题")
+            npt = max(d["pt_n"], 1)
+            ss_tot = d["pt_sy2"] - d["pt_sy"] ** 2 / npt
             out[f"H{h}"] = dict(
                 crps_norm_sum=raw_crps / sn,
                 crps_sum_norm=float(d["cs_sum"] / used / ss),
@@ -255,6 +283,11 @@ class StreamingMetrics:
                 n_scored_windows=int(d["n_scored"]),
                 **{k: v / used for k, v in d["picp"].items()},
                 **{k: v / used for k, v in d["mpiw"].items()},
+                # 点预测：τ=0.5 / 样本中位数，raw 单位，pooled over clean cells
+                mae=float(d["pt_abs"] / npt),
+                rmse=float(np.sqrt(d["pt_sse"] / npt)),
+                r2=float(1.0 - d["pt_sse"] / ss_tot) if ss_tot > 0 else float("nan"),
+                n_point_cells=int(d["pt_n"]),
             )
         return out
 
@@ -286,8 +319,11 @@ def pick_diag_subset(raw, starts, keep, n_win=16, n_station=32, seed=0):
 
 # ------------------------------------------------------------------ 落盘
 def out_dirs(method, city):
-    d = os.path.join(RESULT_ROOT, "metrics", method, city)
-    g = os.path.join(RESULT_ROOT, "diag", method, city)
+    # BASELINE_TAG 只改评测产物目录，**不改 ckpt 目录**，这样 --eval_only 还能找到
+    # 原 checkpoint（例如加点预测指标时用 BASELINE_TAG=point 重评，不覆盖旧 JSON）。
+    tag = os.environ.get("BASELINE_TAG", "").strip()
+    d = os.path.join(RESULT_ROOT, "metrics" + (f"_{tag}" if tag else ""), method, city)
+    g = os.path.join(RESULT_ROOT, "diag" + (f"_{tag}" if tag else ""), method, city)
     c = os.path.join(RESULT_ROOT, "ckpt", method, city)
     for x in (d, g, c):
         os.makedirs(x, exist_ok=True)
@@ -308,7 +344,9 @@ def save_metrics(method, city, seed, res, extra=None):
         print(f"[{method}/{city}/seed{seed}] {h}  crpsΣ {r['crps_norm_sum']:.4f}  "
               f"crpsΣsum {r['crps_sum_norm']:.4f}  crps_nz {r['crps_nz']:.4f}  "
               f"PICP50 {r.get('picp50', float('nan')):.3f}  "
-              f"PICP90 {r.get('picp90', float('nan')):.3f}", flush=True)
+              f"PICP90 {r.get('picp90', float('nan')):.3f}  "
+              f"MAE {r.get('mae', float('nan')):.3f}  "
+              f"R2 {r.get('r2', float('nan')):.4f}", flush=True)
     return d
 
 
