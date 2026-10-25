@@ -114,40 +114,133 @@
 
 ```
 result/baselines/
-  metrics/{method}/{city}/H{24,48,72}_seed{s}.json   # 指标 + 超参 + 窗口数
-  diag/{method}/{city}/seed0.npz                     # 16 窗 × 32 分层站 × 72 × 99 分位，float16
-  ckpt/{method}/{city}/seed{s}.pth
+  metrics/{method}/{city}/H{24,48,72}_seed{s}.json        # 概率指标 + 超参 + 窗口数
+  metrics_point/{method}/{city}/H{24,48,72}_seed{s}.json  # 同结构；另含 mae/rmse/r2/n_point_cells
+  metrics_point/_y_mean.json                              # 每 (city,H) clean cells 的 mean(y)，nMAE 缓存
+  diag/{method}/{city}/seed0.npz                          # 16 窗 × 32 分层站 × 72 × 99 分位，float16
+  diag_point/{method}/{city}/seed0.npz                    # 同上；点重评通常加 --no_diag，当前为空目录
+  ckpt/{method}/{city}/seed{s}.pth                        # 训练产物；BASELINE_TAG 不改此目录
   logs/*.log
 ```
 
-诊断子集固定 seed 0、按零率分层选站，供开发零膨胀方法时看预测形状；不落全量预测。
+* `BASELINE_TAG=point` **只切评测目录**：`metrics → metrics_point`、`diag → diag_point`，`ckpt` 不动。这样 `--eval_only` 仍能读到原 checkpoint，也不会覆盖旧 JSON；默认空 tag 写回 `metrics/`。
+* 点指标不另存预测：`*_point.json` 的 `mae/rmse/r2/n_point_cells` 就是该 horizon 在 clean 站×窗上 pool 后的结果（分位方法取 τ=0.5，样本方法取样本中位数），与 `metrics/` 的 crpsΣ 共用同一批窗口和 mask。
+* `metrics_point/_y_mean.json` 由 `summarize_point.py` 首次运行时生成并复用，只统计测试期 clean cells，不参与训练。
+* `diag_point/` 与 `diag/` 同构；点重评为省时统一加了 `--no_diag`，所以当前 `diag_point/` 只有空目录（概率诊断 `diag/` 仍在，约 778 MB）。
+* `unist_pool_smoke/` 是冒烟产物，不进主表、不上 HF；`archive_*` 是 DiffSTG v1/v2 归档，不进主表。
 
 ## 9. 复现
 
+默认 seed 0；多 seed 加 `--seed 1` / `--seed 2`。补点指标时在命令前加 `BASELINE_TAG=point`，评测目录自动切到 `metrics_point/`，checkpoint 仍从 `ckpt/` 读取。
+
+### 9.1 训练 + 概率评测
+
 ```bash
-# #7–#10（seed 0，五城）
+# #7–#10, #13（五城；seed 1/2 改 --seed）
 for c in LOA JHB MEL SPO SZH; do
-  for m in itransformer stgcn stgcn_nograph gwnet; do
+  for m in itransformer stgcn stgcn_nograph gwnet mqcnn; do
     python3 script/baselines/train_quant_backbone.py --method $m --city $c --device 0
   done
 done
 
-# #11/#12
-python3 script/baselines/train_gluonts.py --method tft   --city MEL --device 0
-python3 script/baselines/train_gluonts.py --method deepar --city MEL --device 0
+# #6 PatchTST+quant pre72
+python3 script/baselines/train_patch_quant_pre72.py --city MEL --device 0
 
-# #14（官方 CSDI；SZH 用 128 窗）
+# #11 TFT / #12 DeepAR（主表用 ISQF）
+python3 script/baselines/train_gluonts.py --method tft    --city MEL --device 0
+python3 script/baselines/train_gluonts.py --method deepar --distr isqf --city MEL --device 0
+
+# #14 官方 CSDI（默认均匀抽 256 窗；SZH 用 128 窗）
 python3 script/baselines/csdi_official.py --city MEL --device 0 --n_eval_windows 256
 python3 script/baselines/csdi_official.py --city SZH --device 0 --n_eval_windows 128
 
-# #18/#19
+# #15 TimeGrad / #16 TSDiff / #17 DiffSTG
+python3 script/baselines/train_timegrad.py --city MEL --device 0
+python3 script/baselines/train_tsdiff.py  --city MEL --device 0
+python3 script/baselines/train_diffstg.py --city MEL --device 0
+
+# #18/#19 零样本（确定性，单次）
 python3 script/baselines/run_zeroshot.py --method chronos_bolt --city MEL --device 0
 python3 script/baselines/run_zeroshot.py --method moirai --city MEL --device 0
 
-# 汇总（seed 0，crpsΣ）
+# #20 UniTS-FT + pool（公开主干 + 每城 prompt；附录行）
+# 权重：external/weights/units_x64_supervised_checkpoint.pth
+python3 script/baselines/train_unist.py --city MEL --device 0
+
+# #21 OpenCity-Plus（冻结主干、只训 99 分位头）
+# 权重：external/OpenCity/model_weights/OpenCity/OpenCity-plus.pth
+python3 script/baselines/train_opencity.py --city MEL --seed 0 --device 0
+```
+
+### 9.2 点预测补评（`--eval_only`，不重训）
+
+```bash
+# 主干类
+BASELINE_TAG=point python3 script/baselines/train_quant_backbone.py \
+  --method itransformer --city LOA --seed 0 --device 0 --eval_only --no_diag
+BASELINE_TAG=point python3 script/baselines/train_patch_quant_pre72.py \
+  --city LOA --seed 0 --device 0 --eval_only --no_diag
+
+# TFT：fast path，batch 只影响速度/显存，不影响结果
+BASELINE_TAG=point python3 script/baselines/train_gluonts.py \
+  --method tft --city LOA --seed 0 --device 0 --eval_only \
+  --predict_batch_size 4096 --no_diag
+
+# DeepAR / ISQF：4096 在 LOA/SZH 会 OOM，用 512；SZH 另加 --limit_test 256
+BASELINE_TAG=point python3 script/baselines/train_gluonts.py \
+  --method deepar --distr isqf --city LOA --seed 0 --device 0 --eval_only \
+  --predict_batch_size 512 --no_diag
+
+# 扩散类
+BASELINE_TAG=point python3 script/baselines/csdi_official.py \
+  --city LOA --device 0 --eval_only --n_eval_windows 256 --no_diag
+BASELINE_TAG=point python3 script/baselines/train_timegrad.py \
+  --city LOA --seed 0 --device 0 --eval_only --n_sample 100 --no_diag
+BASELINE_TAG=point python3 script/baselines/train_tsdiff.py \
+  --city LOA --seed 0 --device 0 --eval_only --n_sample 100 --no_diag
+BASELINE_TAG=point python3 script/baselines/train_diffstg.py \
+  --city LOA --seed 0 --device 0 --eval_only --n_sample 100 \
+  --sample_windows 8 --sample_chunk 8 --no_diag
+
+# 零样本
+BASELINE_TAG=point python3 script/baselines/run_zeroshot.py \
+  --method moirai --city SZH --device 0 --no_diag \
+  --batch_windows 8 --batch_series 512
+
+# OpenCity / UniTS
+BASELINE_TAG=point python3 script/baselines/train_opencity.py \
+  --city LOA --seed 0 --device 0 --eval_only --no_diag
+BASELINE_TAG=point python3 script/baselines/train_unist.py \
+  --city LOA --seed 0 --device 0 --eval_only
+```
+
+### 9.3 汇总
+
+```bash
+# 概率主表（crpsΣ 等）
 python3 script/baselines/summarize.py
 python3 script/baselines/summarize.py --markdown
+
+# 点预测表（MAE/RMSE/R²；默认读 metrics_point/）
+python3 script/baselines/summarize_point.py --seeds 0,1,2 --markdown
+python3 script/baselines/summarize_point.py --seeds 0,1,2 --metric rmse
+python3 script/baselines/summarize_point.py --seeds 0,1,2 --metric r2
+
+# 若要用 summarize.py 读 metrics_point/，加 --tag point（不是独立脚本）
+python3 script/baselines/summarize.py --tag point
 ```
+
+### 9.4 显存敏感参数（只影响能否跑完，不改变模型结果）
+
+| 方法 | 默认/过大时的症状 | 实际使用 |
+|---|---|---|
+| TFT | `--predict_batch_size 4096` 可跑；输出只有 99 分位，不展开 200 样本 | `--predict_batch_size 4096`，只用于提速 |
+| DeepAR / ISQF | 4096 在 LOA/SZH `OutOfMemoryError`（输出 200 样本 × 72 步） | `--predict_batch_size 512`；SZH 再加 `--limit_test 256` |
+| Moirai | 默认 32 窗 × 4096 序列在 LOA/MEL/SPO/SZH OOM | `--batch_windows 8 --batch_series 512` |
+| DiffSTG | SZH 默认采样请求 18.6 GB，OOM | SZH `--sample_windows 2 --sample_chunk 8`；LOA `--sample_windows 8 --sample_chunk 8` |
+| CSDI | SZH 843 站全站并行采样 OOM | `--n_eval_windows 128 --eval_batch 2 --sample_chunk 2`（小城市自动 8/32） |
+
+`--sample_windows` / `--eval_batch` / `--predict_batch_size` 都只切分推理批次；结果应与不分块一致（TFT fast path 已用 32 窗逐条对账，byte-identical）。若怀疑 fast path，可加 `--slow_eval` 走 GluonTS 官方 `predict`，速度慢很多。
 
 ## 10. 当前状态（2026-10-25 20:30）
 
