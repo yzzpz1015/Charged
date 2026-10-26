@@ -397,6 +397,7 @@ def bootstrap_variants(pred_seg, y, starts_seg, ok, hod, wkd, js, smean, N, rng,
 
         te = src['te']
         P = len(te['s'])
+        sn = float(np.nanmean(smean))
         for name, kind, conds in (('honest', 'va', ('hour',)),
                                   ('roll28', 'roll', ('hour',)),
                                   ('oracleWA', 'te', ('hour', 'wk', 'amp'))):
@@ -404,6 +405,12 @@ def bootstrap_variants(pred_seg, y, starts_seg, ok, hod, wkd, js, smean, N, rng,
             cell_cnt = np.zeros(N)      # 每站实际被计分的窗口数（剔除后逐站不同）
             sum_crps, pit_acc = 0.0, {}
             nz_sum, nz_win, nz_cells, nz_den = 0.0, 0, 0, 0
+            # T4/T5：与 baselines.StreamingMetrics 同一口径
+            c0_st, cp_st = np.zeros(N), np.zeros(N)
+            c0_sum, cp_sum, c0_n, cp_n = 0.0, 0.0, 0, 0
+            wis_st, wis_st_cnt = np.zeros(N), np.zeros(N)
+            wis_nz_sum, wis_nz_win = 0.0, 0
+            wis_zero_sum, wis_zero_win = 0.0, 0
             pool_sz = []
             used = 0        # 真正有池、被计分的窗口数（跳过的不该按 0 分算进平均）
             for i in range(P):
@@ -443,6 +450,31 @@ def bootstrap_variants(pred_seg, y, starts_seg, ok, hod, wkd, js, smean, N, rng,
                 assert np.all(np.isfinite(c_st)), f"{name} H={H} 窗口 {i}: 逐站 CRPS 非有限"
                 per_st[mk] += c_st
                 cell_cnt[mk] += 1
+
+                # T5：零格/正格精确分解（逐站累计）
+                obs_m = obs[mk]
+                zero = (obs_m == 0)
+                pos = ~zero
+                mk_idx = np.flatnonzero(mk)
+                if zero.any():
+                    c0_st[mk_idx[zero]] += c_st[zero]
+                    c0_sum += float(c_st[zero].sum())
+                    c0_n += int(zero.sum())
+                if pos.any():
+                    cp_st[mk_idx[pos]] += c_st[pos]
+                    cp_sum += float(c_st[pos].sum())
+                    cp_n += int(pos.sum())
+
+                # T4：WIS（同一批冻结残差池样本）
+                wis_cells = pb.wis_from_samples(smp[:, mk], obs_m)
+                wis_st[mk_idx] += wis_cells
+                wis_st_cnt[mk_idx] += 1.0
+                if pos.any():
+                    wis_nz_sum += float(wis_cells[pos].mean())
+                    wis_nz_win += 1
+                if zero.any():
+                    wis_zero_sum += float(wis_cells[zero].mean())
+                    wis_zero_win += 1
                 # CRPS_sum 是**主指标**（先把同一时刻所有站的值加总、再算 CRPS）。
                 # 抽的是整条残差向量，站间同源结构原样带进来 —— 这正是逐站分位头
                 # 做不到的部分：分位头只能产边际，跨站要么独立、要么强行同分位。
@@ -458,15 +490,36 @@ def bootstrap_variants(pred_seg, y, starts_seg, ok, hod, wkd, js, smean, N, rng,
             # 以前除的是全量 P —— 跳过的窗口等于按"0 CRPS"计入，同样是美化。
             assert used > 0, f"{name} H={H} 一个窗口都没计分"
             # 逐站除自己的计分窗口数：剔除是站×窗级的，不能拿全城统一的 used。
-            crps_norm = float(np.mean(per_st / np.maximum(cell_cnt, 1)) / np.nanmean(smean))
+            cnt = np.maximum(cell_cnt, 1)
+            c0_raw = float(np.mean(c0_st / cnt))
+            cp_raw = float(np.mean(cp_st / cnt))
+            crps_norm = float(np.mean(per_st / cnt) / sn)
+            if not np.isclose(c0_raw + cp_raw,
+                              np.mean(per_st / cnt), rtol=1e-6, atol=1e-8):
+                raise AssertionError(
+                    f"{name} H={H}: CRPS 零/正分解不闭合 "
+                    f"{c0_raw:.8f}+{cp_raw:.8f}")
+            wis_raw = float(np.mean(wis_st / cnt))
             out.setdefault(name, {})[j] = dict(
                 crps_norm_sum=crps_norm,
                 crps_sum_norm=float(sum_crps / used / np.nansum(smean)),
                 n_pool_med=int(np.median(pool_sz)) if pool_sz else 0,
                 n_used=used, n_skip=P - used,
                 # 条件 CRPS：剔掉真零格后的逐格 CRPS / 非零格占比（见 nz_crps 的说明）
-                crps_nz=float(nz_sum / nz_win / np.nanmean(smean)) if nz_win else float('nan'),
+                crps_nz=float(nz_sum / nz_win / sn) if nz_win else float('nan'),
                 nz_rate=float(nz_cells / max(nz_den, 1)) if nz_win else float('nan'),
+                # T4
+                wis=float(wis_raw / sn),
+                wis_nz=float(wis_nz_sum / max(wis_nz_win, 1) / sn),
+                wis_zero=float(wis_zero_sum / max(wis_zero_win, 1) / sn),
+                # T5（normalized 后两项严格加回 crps_norm_sum）
+                crps_zero_contrib=float(c0_raw / sn),
+                crps_pos_contrib=float(cp_raw / sn),
+                crps_zero_mean=float(c0_sum / max(c0_n, 1)),
+                crps_pos_mean=float(cp_sum / max(cp_n, 1)),
+                zero_cell_frac=float(c0_n / max(c0_n + cp_n, 1)),
+                n_zero_cells=int(c0_n),
+                n_pos_cells=int(cp_n),
                 **{k: v / used for k, v in pit_acc.items()})
     return out
 

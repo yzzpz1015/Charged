@@ -86,6 +86,30 @@ def crps_fair(samples, obs):
     return t1 - (w * s).sum(0)
 
 
+# WIS 的中央区间：α = 0.02/0.05/0.10/0.20/0.50（覆盖 98/95/90/80/50%），
+# 与标准 interval-score WIS 一致：w0=1/2, w_k=α_k/2，分母 K+1/2=5.5。
+WIS_ALPHAS = (0.02, 0.05, 0.10, 0.20, 0.50)
+WIS_LEVELS = tuple(sorted({x for a in WIS_ALPHAS
+                           for x in (a / 2.0, 1.0 - a / 2.0)} | {0.5}))
+
+
+def wis_from_samples(smp, y):
+    """[S,M] 样本 + [M] 真值 -> [M] WIS（raw 单位）。
+
+    使用中央区间 α ∈ {0.02,0.05,0.10,0.20,0.50} 的标准 interval-score 形式；
+    与 crps_fair 用同一批样本，因而可与 CRPS 并列比较。
+    """
+    q = np.quantile(smp, WIS_LEVELS, axis=0)          # [11,M]
+    med = q[5]
+    wis = 0.5 * np.abs(med - y)
+    for k, a in enumerate(WIS_ALPHAS):
+        lo, hi = q[k], q[10 - k]
+        below = np.maximum(lo - y, 0.0)
+        above = np.maximum(y - hi, 0.0)
+        wis = wis + (a / 2.0) * ((hi - lo) + (2.0 / a) * (below + above))
+    return wis / 5.5
+
+
 def pit_metrics(samples, obs, levels=(0.5, 0.8, 0.9)):
     """PICP + MPIW。levels=0.5 用 [q25,q75]，0.8 用 [q10,q90]，0.9 用 [q5,q95]。"""
     out = {}

@@ -131,11 +131,22 @@ def flatten_windows(X, Y):
 
 
 # ------------------------------------------------------------------ 指标
-def _empty_acc():
+def _empty_acc(n_station):
     return dict(per_win=[], cs_sum=0.0, nz_sum=0.0, nz_win=0, nz_cells=0,
                 nz_den=0, n_scored=0, picp={}, mpiw={},
                 # 点预测（所有方法同口径）：预测分布的 τ=0.5（采样类取样本中位数）
-                pt_abs=0.0, pt_sse=0.0, pt_sy=0.0, pt_sy2=0.0, pt_n=0)
+                pt_abs=0.0, pt_sse=0.0, pt_sy=0.0, pt_sy2=0.0, pt_n=0,
+                # T4：WIS（同一批样本）。wis_nz/wis_zero 与 crps_nz 同口径：
+                # 先窗内按格平均，再对有该类型格的窗平均。
+                wis_st_sum=np.zeros(n_station, np.float64),
+                wis_st_cnt=np.zeros(n_station, np.float64),
+                wis_nz_sum=0.0, wis_nz_win=0,
+                wis_zero_sum=0.0, wis_zero_win=0,
+                # T5：crpsΣ 的零格/正格精确分解。逐站累计后在 result() 里
+                # 按 mean_station(每站总和/每站格数) 求和，两项严格加回 raw_crps。
+                c0_st_sum=np.zeros(n_station, np.float64),
+                cp_st_sum=np.zeros(n_station, np.float64),
+                c0_sum=0.0, cp_sum=0.0, c0_n=0, cp_n=0)
 
 
 class StreamingMetrics:
@@ -166,7 +177,7 @@ class StreamingMetrics:
         self.horizons = tuple(horizons)
         self.U = U
         self.u_ind = ke.strat_u(np.random.default_rng(0), U, raw.shape[1], shared=False)
-        self.acc = {h: _empty_acc() for h in self.horizons}
+        self.acc = {h: _empty_acc(raw.shape[1]) for h in self.horizons}
         self.per_win = {h: np.full((len(starts), raw.shape[1]), np.nan, np.float32)
                         for h in self.horizons}
         self.diag_win_ids = diag_win_ids
@@ -205,10 +216,36 @@ class StreamingMetrics:
                 smp = self._samples_from_quant(pred72[:, j, :])
             ym = truth[mk]
             d = self.acc[h]
-            self.per_win[h][m, mk] = pb.crps_fair(smp[:, mk], ym)
+            crps_cells = pb.crps_fair(smp[:, mk], ym)
+            self.per_win[h][m, mk] = crps_cells
             d["n_scored"] += 1
             d["nz_den"] += int(mk.sum())
             d["cs_sum"] += float(pb.crps_fair(smp[:, mk].sum(1), ym.sum()))
+
+            # T5：按真值是否为 0 分解（同一批 crps_cells；逐站累计）
+            zero = (truth[mk] == 0)
+            pos = ~zero
+            mk_idx = np.flatnonzero(mk)
+            if zero.any():
+                d["c0_st_sum"][mk_idx[zero]] += crps_cells[zero]
+                d["c0_sum"] += float(crps_cells[zero].sum())
+                d["c0_n"] += int(zero.sum())
+            if pos.any():
+                d["cp_st_sum"][mk_idx[pos]] += crps_cells[pos]
+                d["cp_sum"] += float(crps_cells[pos].sum())
+                d["cp_n"] += int(pos.sum())
+
+            # T4：WIS（同一批样本）；正/零格分开累计，便于判定 crps_nz 优势
+            wis_cells = pb.wis_from_samples(smp[:, mk], ym)
+            d["wis_st_sum"][mk_idx] += wis_cells
+            d["wis_st_cnt"][mk_idx] += 1.0
+            if pos.any():
+                d["wis_nz_sum"] += float(wis_cells[pos].mean())
+                d["wis_nz_win"] += 1
+            if zero.any():
+                d["wis_zero_sum"] += float(wis_cells[zero].mean())
+                d["wis_zero_win"] += 1
+
             nz = mk & (truth > 0)
             if nz.any():
                 d["nz_sum"] += float(pb.crps_fair(smp[:, nz], truth[nz]).mean())
@@ -275,12 +312,33 @@ class StreamingMetrics:
                     f"数量级以上，聚合口径有问题")
             npt = max(d["pt_n"], 1)
             ss_tot = d["pt_sy2"] - d["pt_sy"] ** 2 / npt
+            # T5：精确分解。per_st == c0_st_sum + cp_st_sum（同一批 crps_cells），
+            # 所以 mean_st(per_st/cnt) == mean_st(c0/cnt) + mean_st(cp/cnt)。
+            c0_raw = float(np.mean(d["c0_st_sum"] / cnt))
+            cp_raw = float(np.mean(d["cp_st_sum"] / cnt))
+            if not np.isclose(c0_raw + cp_raw, raw_crps, rtol=1e-6, atol=1e-8):
+                raise AssertionError(
+                    f"H={h} CRPS 零/正分解不闭合: {c0_raw:.8f}+{cp_raw:.8f}"
+                    f" vs {raw_crps:.8f}")
+            wis_raw = float(np.mean(d["wis_st_sum"] / cnt))
             out[f"H{h}"] = dict(
                 crps_norm_sum=raw_crps / sn,
                 crps_sum_norm=float(d["cs_sum"] / used / ss),
                 crps_nz=float(d["nz_sum"] / max(d["nz_win"], 1) / sn),
                 nz_rate=float(d["nz_cells"] / max(d["nz_den"], 1)),
                 n_scored_windows=int(d["n_scored"]),
+                # T4
+                wis=float(wis_raw / sn),
+                wis_nz=float(d["wis_nz_sum"] / max(d["wis_nz_win"], 1) / sn),
+                wis_zero=float(d["wis_zero_sum"] / max(d["wis_zero_win"], 1) / sn),
+                # T5（normalized 后两项严格加回 crps_norm_sum）
+                crps_zero_contrib=float(c0_raw / sn),
+                crps_pos_contrib=float(cp_raw / sn),
+                crps_zero_mean=float(d["c0_sum"] / max(d["c0_n"], 1)),
+                crps_pos_mean=float(d["cp_sum"] / max(d["cp_n"], 1)),
+                zero_cell_frac=float(d["c0_n"] / max(d["c0_n"] + d["cp_n"], 1)),
+                n_zero_cells=int(d["c0_n"]),
+                n_pos_cells=int(d["cp_n"]),
                 **{k: v / used for k, v in d["picp"].items()},
                 **{k: v / used for k, v in d["mpiw"].items()},
                 # 点预测：τ=0.5 / 样本中位数，raw 单位，pooled over clean cells

@@ -27,7 +27,11 @@ def load(seed, metric, root=None):
     for p in glob.glob(os.path.join(root or ROOT, "*", "*", f"H*_seed{seed}.json")):
         with open(p) as f:
             d = json.load(f)
-        out[(d["method"], d["city"], d["horizon"])] = (d[metric], d)
+        h = d["horizon"]
+        # UniTS 写的是整数 24/48/72，其余方法写 "H24"/"H48"/"H72"；统一成后者。
+        if isinstance(h, (int, np.integer)):
+            h = f"H{int(h)}"
+        out[(d["method"], d["city"], h)] = (d[metric], d)
     return out
 
 

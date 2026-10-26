@@ -237,6 +237,14 @@ def main():
                    n_scored_windows=d["n_used"],
                    picp50=d["picp50"], picp80=d["picp80"], picp90=d["picp90"],
                    mpiw50=d["mpiw50"], mpiw80=d["mpiw80"], mpiw90=d["mpiw90"],
+                   # T4/T5（由 bootstrap_variants 同一批残差池样本得到）
+                   wis=d["wis"], wis_nz=d["wis_nz"], wis_zero=d["wis_zero"],
+                   crps_zero_contrib=d["crps_zero_contrib"],
+                   crps_pos_contrib=d["crps_pos_contrib"],
+                   crps_zero_mean=d["crps_zero_mean"],
+                   crps_pos_mean=d["crps_pos_mean"],
+                   zero_cell_frac=d["zero_cell_frac"],
+                   n_zero_cells=d["n_zero_cells"], n_pos_cells=d["n_pos_cells"],
                    # 点预测 = UniTS 主干输出（residual pool 只加概率层）
                    mae=float(np.abs(e).mean()),
                    rmse=float(np.sqrt((e ** 2).mean())),

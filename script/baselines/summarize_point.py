@@ -114,14 +114,17 @@ def main():
     if args.metric == "r2":
         print("R² 为 pooled clean cells；SZH 由站间水平差主导，"
               "跨方法比较请看 MAE/nMAE。")
+    norm_name = {"mae": "nMAE", "rmse": "nRMSE", "r2": "五城平均 R²"}[
+        args.metric]
     for h in HORIZONS:
         print(f"\n===== {h} =====")
         if args.markdown:
-            print("| 方法 | " + " | ".join(CITIES) + " | 五城平均 nMAE |")
+            print("| 方法 | " + " | ".join(CITIES)
+                  + f" | {norm_name} |")
             print("|---|" + "---:|" * len(CITIES) + "---:|")
         else:
             print("method".ljust(26) + "".join(f"{c:>22}" for c in CITIES)
-                  + "   nMAE-avg")
+                  + f"   {norm_name}-avg")
         for m in methods:
             nm, cells = [], []
             for c in CITIES:
@@ -137,6 +140,8 @@ def main():
                 cells.append(cell)
                 if args.metric in ("mae", "rmse"):
                     nm.extend([v / ym[(c, h)] for v in vals])
+                elif args.metric == "r2":
+                    nm.extend(vals)
             ncity = sum(1 for c in CITIES
                         if any((m, c, h, s) in tab for s in seeds))
             avg = f"{np.mean(nm):.4f}" if nm else "—"
@@ -148,7 +153,8 @@ def main():
             else:
                 print(name.ljust(26) + "".join(f"{v:>22}" for v in cells)
                       + f"   {avg:>8}")
-    print("\n* = 测试窗少于该城全量；nMAE = MAE / mean(y)（同一 clean cells）")
+    print("\n* = 测试窗少于该城全量；nMAE/nRMSE = 指标 / mean(y)"
+          "（同一 clean cells）")
     print("点预测定义：分位模型 τ=0.5；采样模型样本中位数。")
 
 
