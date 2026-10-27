@@ -42,7 +42,7 @@
 2. **图结构几乎没用**：STGCN 带图 vs 去图（#8 vs #9）五城同向，但只有 1%~2%；Graph WaveNet 接近 iTransformer，无额外收益。
 3. **扩散类整体仍打不过分位头，但城间差异大**：TimeGrad 在 LOA/JHB（0.2545/0.2853）已逼近最好的分位头，TSDiff 在 LOA/JHB/MEL（0.2701/0.2942/0.3516）稳定在中游；两者都在 SPO 掉队（0.5066/0.5415），DiffSTG 尤甚。DiffSTG v3（逐 block 历史条件 FiLM）在 JHB 为 0.3201、MEL 0.4251±0.0060，但 SPO（0.6117±0.0712）与 LOA 全量（0.3931，且对采样分块不稳）明显欠离散；官方 CSDI 依旧结构性欠离散（PICP90 0.48~0.62），说明 #3 的失败不是门控改造单独造成的。
 4. **逐站自回归模型吃亏**：DeepAR-ISQF 在 SZH 只有 0.1909（分位头约 0.08），站多、每站训练数据少时明显掉队。
-5. **零样本可用但非最强**：Chronos-Bolt 在 SZH（0.0868）接近有监督分位头，Moirai 整体中游。补充批次还接入了 UniTS-FT（#20，五城 H24 crpsΣ 均值 0.3018）与 OpenCity-Plus（#21，0.2927），均未超过第一梯队；完整数值与子集/口径说明见 §11.4。
+5. **零样本可用但非最强**：Chronos-Bolt 在 SZH（0.0868）接近有监督分位头，Moirai 整体中游。补充批次还接入了 UniTS-FT（#20，五城 H24 crpsΣ 均值 0.3018）与 OpenCity-Plus（#21，0.2920，3 seeds），均未超过第一梯队；完整数值与子集/口径说明见 §11.4。
 
 ## 口径提醒
 
@@ -67,4 +67,10 @@ python3 script/baselines/summarize.py
 
 权重：HuggingFace [`yzzpz/Charged-checkpoints`](https://huggingface.co/yzzpz/Charged-checkpoints) 的 `baselines/ckpt/{method}/{city}/seed{s}.pth`。**160 个 baseline checkpoint 已全部同步**（16 组方法 × 各城各 seed，含 TimeGrad-SZH、DiffSTG-LOA/SZH、OpenCity seed0–2），本地与远端逐文件字节数一致；零样本 Chronos-Bolt / Moirai 无本地训练权重，走官方 HF 权重。
 
-指标 JSON **不需要上传**：`metrics/`、`metrics_point/`、`metrics_wis/` 都可由 checkpoint + 公开数据在本地重算，属于派生结果，不作为交付物。本地三套目录完整（含 WIS 的 465 个 JSON 与点预测的 496 个 JSON），用 `summarize.py` / `summarize_point.py` 重生成表格。
+指标 JSON 已同步到同一 HF 仓库的 `baselines/` 目录：
+
+- `metrics/`：510 个（含 OpenCity seed0–2、UniTS 五城）；
+- `metrics_point/`：496 个（含 TimeGrad/CSDI 的 SZH、DiffSTG 的 LOA）；
+- `metrics_wis/`：495 个（WIS / WIS_nz / 零格与正格贡献）。
+
+`unist_pool_smoke/` 冒烟产物已从远端删除。本地三套目录与远端逐文件一致，可用 `summarize.py` / `summarize_point.py` 重生成表格。
