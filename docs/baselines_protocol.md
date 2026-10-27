@@ -261,7 +261,7 @@ python3 script/baselines/summarize.py --tag point
 * #13 MQ-CNN：五城 seed 0/1/2 完成。
 * #14 官方 CSDI：五城完成（LOA/JHB/MEL/SPO 256 窗，SZH 128 窗，`nsample=50`）。
 * #15 TimeGrad：五城全量完成。H24 crpsΣ LOA/JHB/MEL/SPO/SZH = 0.2545 / 0.2861 / 0.3980 / 0.5139 / 0.1028；SZH PICP90 0.796，偏欠离散。
-* #16 TSDiff：五城完成（SZH 为 256 窗子集），H24 crpsΣ 0.2701 / 0.2942 / 0.3516 / 0.5415 / 0.0889*；LOA/SZH PICP90 分别为 0.922 / 0.876。
+* #16 TSDiff：五城完成（SZH 为 256 窗子集），H24 crpsΣ 0.2701 / 0.2942 / 0.3516 / 0.5415 / 0.0889*；LOA/SZH PICP90 分别为 0.922 / 0.876。**概率、点预测、ckpt 均只有 seed 0**。按 2026-10-27 决定不补 seed1/2：其与 TimeGrad 的 H24→H48 点预测次序变化只作单 seed 观察，不作排名反转结论（补齐一个 seed 五城约 9.6 GPU·h，且 TimeGrad/CSDI/DiffSTG 的 seed 覆盖同样不齐，补了也不能形成干净的 mean±std 对比）。
 * #17 DiffSTG v3（每 block 历史 FiLM）：
   * JHB 0.3201（PICP50/90 0.515/0.922，已校准）；
   * MEL seed0/1 0.4294/0.4209（PICP90 0.603/0.633，仍偏欠离散，但 seed 稳定）；
@@ -461,6 +461,8 @@ MPIW50 的单位是原始 kWh/h，各城需求水平相差约一个数量级（M
 
 **raw MAE 不能跨城平均（覆盖必须一致）**：TimeGrad 只算 LOA/JHB/MEL/SPO 时 raw MAE 均值 9.53，补上 SZH（34.67）后为 14.56；CSDI 四城 10.60 → 五城 15.29；DiffSTG 四城 12.56 → 五城 26.18；MQ-CNN 五城 12.11。若按四城平均，TimeGrad/CSDI 会凭空优于 MQ-CNN，纯属缺 SZH 的假象。本表因此只报 nMAE（按同一城 `mean(y)` 归一化）与 R²，不报 raw MAE 的五城均值。
 
+**TSDiff 单 seed 提示**：TSDiff 的概率、点预测与 ckpt 均只有 seed 0。它与 TimeGrad 的 H24（nMAE 0.4916 vs 0.4900）与 H48（0.5403 vs 0.5489）次序变化只是单 seed 观察，且 TSDiff 的 SZH 为 256 窗子集，不能作为“排名反转”结论。
+
 #### 逐城明细（MAE / RMSE / R² / nMAE）
 
 每格 = `MAE / RMSE / R² / nMAE`；MAE/RMSE 为原始 kWh/h，R² 与 nMAE 为同一城 clean cells 上的值。末两列为五城简单平均。`*` = 该城为子集窗；raw MAE/RMSE 不跨城平均。
@@ -546,6 +548,8 @@ MPIW50 的单位是原始 kWh/h，各城需求水平相差约一个数量级（M
 
 **‡ 采样不稳定**：DiffSTG-LOA 的同一 ckpt 在两次独立 100 样本采样间差异极大——主评测（`sample_chunk=16`）crpsΣ 0.3931 / PICP90 0.677 / MPIW90 6.4，WIS 重评（`sample_chunk=8`）crpsΣ 0.9913 / PICP90 0.274 / MPIW90 25.2，WIS 0.6448。二者仅 RNG 流不同，不是权重变化；说明 LOA 的 100 样本分布极不稳定。表中 crpsΣ/crps_nz/PICP/MPIW 用主评测，WIS 用重评，**该行任何跨指标比较都不成立**；DiffSTG 的 WIS 五城平均 0.3292‡ 含 LOA，不含 LOA 的四城平均为 0.2503。DiffSTG 行不参与排序解释。
 
+**单 seed 行**：CSDI、TSDiff、DeepAR-ISQF 的概率侧只有 seed 0（TSDiff 的点预测与 ckpt 也只有 seed 0）。这些行可以报数值，但不参与 horizon 间排序解释；TSDiff 与 TimeGrad 的 H24/H48 点预测次序变化仅是单 seed 观察，已在 §11.3 注明。
+
 #### 11.4a 精度：crpsΣ / crps_nz / WIS（五城平均）
 
 | # | 方法 | 口径 | crpsΣ H24 | crpsΣ H48 | crpsΣ H72 | crps_nz H24 | crps_nz H48 | crps_nz H72 | WIS H24 | WIS H48 | WIS H72 |
@@ -614,7 +618,7 @@ MPIW90 单位原始 kWh/h；`*` 为子集城。PICP90 为五个可用城市的�
 * **crpsΣ 前三不变**：MQ-CNN 0.2842、PatchTST 0.2848、iTransformer 0.2891；最大差 0.0049，仍与 seed std 同量级。H48/H72 的排序与 H24 基本一致，PatchTST 在 H72 反超 MQ-CNN（0.3238 vs 0.3255）。
 * **WIS 把 TFT 推回第一梯队，但没有稳定赢家**：H24 五城 WIS PatchTST 0.1704、MQ-CNN 0.1714、OpenCity 0.1763、iTransformer 0.1773、TFT 0.1792；前四差 ≤0.007；TFT 与 PatchTST 差 0.0088，小于 TFT 自身 SPO 的逐城 seed std（0.027），也小于 MQ-CNN 的 SPO seed std（0.0043）。PatchTST 与 MQ-CNN 只差 0.0010，与二者逐城 seed std（0.0002–0.002）同量级。WIS 排名与 crpsΣ 排名不完全同序，但前排差异都在 seed 噪声量级，不能据此重排。
 * **TFT 的正值格优势是真的**：WIS_nz 五城平均 TFT 0.2131 / 0.2343 / 0.2431（H24/48/72），在三个 horizon 都是全场最低；PatchTST 0.2200 / 0.2405 / 0.2480，iTransformer 0.2231 / 0.2434 / 0.2533，MQ-CNN 0.2213 / 0.2419 / 0.2511。TFT 的边际 WIS 仍落后，是因为零格（§11.5：SPO 零格贡献 0.2080 vs iTransformer 0.1299），不是因为正值格区间更宽。
-* **扩散类 WIS 没有翻盘**：全量五城的 TimeGrad H24 WIS 0.1856，已接近第一梯队；TSDiff 0.1848* 但 SZH 是子集；CSDI 0.2069*，且 PICP90 只有 0.590*；DiffSTG 0.3292*‡（不含 LOA 0.2503），仍最差。WIS 与 crpsΣ 对扩散类的判断一致。
+* **扩散类 WIS 没有翻盘**：全量五城的 TimeGrad H24 WIS 0.1856，已接近第一梯队；TSDiff 0.1848* 为单 seed 且 SZH 是子集；CSDI 0.2069* 为单 seed，且 PICP90 只有 0.590*；DiffSTG 0.3292*‡（不含 LOA 0.2503），仍最差。WIS 与 crpsΣ 对扩散类的判断一致，但单 seed 行只作方向性观察。
 * **校准**：分位头/图主干 PICP90 为 0.80–0.89（TFT 0.868、UniTS 0.801）；零样本 Moirai 0.852、Chronos-Bolt 0.776（后者受 9 分位夹断影响，不作形状结论）；TimeGrad 0.780、DiffSTG 0.729*、CSDI 0.590* 仍欠离散。MPIW90 逐城看，分位头类在 MEL/SZH 更宽、LOA/JHB/SPO 更窄，TFT 与 iTransformer 的方向仍逐城不一致，不能五城平均。
 * **DeepAR-ISQF 的概率 SZH 是全量**（crpsΣ 0.3614 五城、SZH 0.1909），其 WIS 也按全量；点预测表的 SZH `*` 是另一回事。
 
@@ -647,7 +651,7 @@ MPIW90 单位原始 kWh/h；`*` 为子集城。PICP90 为五个可用城市的�
 
 * **SZH 的 crpsΣ 几乎全是正格**（零格仅 ~3%），所以 SZH 上的差异不能再用「零格白送分」解释；LOA/JHB/MEL/SPO 的零格占 21–31%，方法在零格上的行为会显著改变边际 crpsΣ。
 * **TFT vs iTransformer 的两面性被量化**：TFT 在 LOA/JHB/MEL 的正格贡献更低（0.2047/0.1952/0.2689 vs 0.2120/0.1971/0.2709），在 SZH 反而更高（0.0899 vs 0.0767）；边际 crpsΣ 落后主要来自 SPO 零格（0.2080 vs 0.1299），而 SPO 正格 TFT 更好（0.3168 vs 0.3472）。这与 WIS_nz 的结论一致。
-* **TSDiff 的 SPO 塌缩在零格**：零格贡献 0.2266，是 SPO 上所有方法中最高；正格 0.3142 仍属中游。TSDiff 的边际 crpsΣ 0.5408 不能解读为「正值格预测差」。
+* **TSDiff 的 SPO 塌缩在零格**：零格贡献 0.2266，是 SPO 上所有方法中最高；正格 0.3142 仍属中游。TSDiff 的边际 crpsΣ 0.5408 不能解读为「正值格预测差」。该结论基于 seed 0，属方向性观察（TSDiff 未补 seed）。
 * **DiffSTG 是正格失败，不是零格问题**：SZH 零格仅 0.0008、正格 0.2350；LOA 在 chunk8 重评下零格 0.2476、正格 0.7437（‡，与主评测非同一次采样）。即使只看正格，它也与第一梯队差一个档。
 * **DeepAR-ISQF 的正格贡献在五城都偏高**（SZH 0.1863、SPO 0.4741），与它逐站单变量、大站集训练不足的结论一致；CSDI 的正格贡献也普遍高（MEL 0.3679、JHB 0.2612），说明官方 CSDI 的问题不只是零格。
 * **closure 与重评差异**：括号内 crpsΣ 是本表所用评测的 crpsΣ。分位/图/零样本方法与 §11.A 主表逐位一致；扩散类因 WIS 重评而重采样，差异 ≤0.001（DiffSTG-LOA 除外），所以分解只对括号内的 crpsΣ 严格闭合，不保证与 §11.A 的独立采样逐位相同。

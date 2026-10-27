@@ -34,7 +34,7 @@
 | chronos_bolt | 0.2643 | 0.2977 | 0.3600 | 0.5189 | 0.0868 |
 | moirai | 0.2722 | 0.3043 | 0.3797 | 0.5329 | 0.1102 |
 
-`*` = 只评固定子集（CSDI 全城 256 窗、SZH 128 窗；TSDiff/DiffSTG 的 SZH 256 窗），`nsample=50`（CSDI）或 100（其余扩散）。`‡` = DiffSTG-LOA 对 `sample_chunk` 敏感：本表用主评测 `sample_chunk=16`（0.3931），WIS 重评用 `chunk=8` 得 0.9913，仅 RNG 流不同；该格不与 §11.4 的 WIS 并列比较。
+`*` = 只评固定子集（CSDI 全城 256 窗、SZH 128 窗；TSDiff/DiffSTG 的 SZH 256 窗），`nsample=50`（CSDI）或 100（其余扩散）。`‡` = DiffSTG-LOA 对 `sample_chunk` 敏感：本表用主评测 `sample_chunk=16`（0.3931），WIS 重评用 `chunk=8` 得 0.9913，仅 RNG 流不同；该格不与 §11.4 的 WIS 并列比较。TSDiff 全部指标只有 seed 0，只能作方向性观察，不参与 horizon 间排序。
 
 ## 五条结论
 
