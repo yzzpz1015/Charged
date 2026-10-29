@@ -14,13 +14,6 @@ import glob
 import json
 import os
 
-BASE_KEYS = {
-    "method", "city", "seed", "horizon", "seq_l", "pre_len", "n_sample",
-    "stations", "crps_norm_sum", "crps_sum_norm", "crps_nz", "nz_rate",
-    "n_scored_windows", "picp50", "picp80", "picp90", "mpiw50", "mpiw80",
-    "mpiw90", "params", "best_valid", "elapsed_s", "n_test_windows",
-    "epochs_run", "d_model", "layers", "lr", "knn",
-}
 POINT_KEYS = {"mae", "rmse", "r2", "n_point_cells"}
 WIS_KEYS = {
     "wis", "wis_nz", "wis_zero", "crps_zero_contrib", "crps_pos_contrib",
@@ -50,9 +43,12 @@ def main():
                 dst = os.path.join(ROOT, view, rel)
                 if os.path.exists(dst) and not args.overwrite:
                     raise SystemExit(f"已存在，拒绝覆盖：{dst}（加 --overwrite）")
-                keep = BASE_KEYS | extra
-                payload = {k: v for k, v in full.items() if k in keep}
-                missing = (BASE_KEYS | extra) - set(payload)
+                # 各方法的超参字段不同（如 DiffSTG 有 ddim_steps/eta、没有
+                # epochs_run/lr），因此不能按固定 BASE_KEYS 求交集；点预测视图
+                # 保留主 JSON 中除 WIS 外的全部字段，WIS 视图全保留。
+                drop = set() if view == "metrics_wis" else (WIS_KEYS - POINT_KEYS)
+                payload = {k: v for k, v in full.items() if k not in drop}
+                missing = extra - set(payload)
                 if missing:
                     raise SystemExit(f"{src} 缺字段 {sorted(missing)}")
                 os.makedirs(os.path.dirname(dst), exist_ok=True)
