@@ -114,8 +114,9 @@ def laplacian_pe(adj: np.ndarray, k: int = 8) -> np.ndarray:
 def build_graph(dist: np.ndarray, k: int = 8):
     """距离矩阵 → (A, A_mx, lap_pe)，与官方 ``args.py`` 同公式。"""
     from api.model.quant_backbones import knn_adjacency
+    # 官方 A_mx = I + D^-1/2 A D^-1/2；A 自身带自环，保持与原实现一致。
     A = knn_adjacency(torch.from_numpy(np.asarray(dist, np.float32)),
-                      k=k).numpy().astype(np.float64)
+                      k=k, self_loop=True).numpy().astype(np.float64)
     d = A.sum(1)
     sinv = np.zeros_like(d)
     nz = d > 0

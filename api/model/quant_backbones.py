@@ -54,10 +54,12 @@ class iTransformerQuant(nn.Module):
 
 # ------------------------------------------------------------------ STGCN
 class _TemporalGLU(nn.Module):
+    """GLU 沿**时间轴**卷积；输入布局 ``[B,C,T,N]``，卷积核必须放在高维 T。"""
+
     def __init__(self, c_in: int, c_out: int, k: int = 3, dropout: float = 0.1):
         super().__init__()
-        self.conv = nn.Conv2d(c_in, 2 * c_out, kernel_size=(1, k),
-                              padding=(0, k // 2))
+        self.conv = nn.Conv2d(c_in, 2 * c_out, kernel_size=(k, 1),
+                              padding=(k // 2, 0))
         self.drop = nn.Dropout(dropout)
 
     def forward(self, x):                              # [B,C,T,N]
@@ -162,11 +164,15 @@ class GWNetQuant(nn.Module):
 
 
 # ------------------------------------------------------------------ 图工具
-def knn_adjacency(distance: torch.Tensor, k: int = 8, self_loop: bool = True) -> torch.Tensor:
+def knn_adjacency(distance: torch.Tensor, k: int = 8,
+                  self_loop: bool = False) -> torch.Tensor:
     """距离矩阵 [N,N] → kNN 邻接，权重 ``exp(-d / median(d>0))``。
 
     kNN 是**有向**的（A 选 B 不代表 B 选 A）；这里保留原始方向，再做行归一化前的
     对称化（max(A, Aᵀ)），避免单向边造成信息只进不出。
+
+    默认**不加**自环：STGCN/GWNet 的归一化函数会自己加一次 I。需要自环且下游
+    不再加 I 的调用方（DiffSTG、OpenCity 官方图）显式传 ``self_loop=True``。
     """
     n = distance.size(0)
     d = distance.clone().float()

@@ -134,7 +134,8 @@ def main():
     ds, raw, starts, keep, smean = C.load_city(args.city)
     N, M = C.check_protocol(args.city, ds, raw, starts)
     dist = C.load_distance(args.city, ds)
-    adj = knn_adjacency(torch.from_numpy(dist), k=args.knn)
+    # DiffSTG 自己的归一化不加 I，因此这里显式保留自环。
+    adj = knn_adjacency(torch.from_numpy(dist), k=args.knn, self_loop=True)
 
     model = DiffSTGModel(N, C.SEQ_L, C.PRE_LEN, d_model=args.d_model,
                          n_layers=args.layers, temb=args.temb,

@@ -89,12 +89,14 @@ class DiffSTGModel(nn.Module):
         # 把历史压成站级均值；RevIN 后该均值≈0，模型拿不到「当前处在周期的哪个
         # 位置」，会退化成预测窗口均值（JHB 实测 E[q]/target=0.67），故改为 GRU。
         self.hist_enc = nn.GRU(1, d_model, batch_first=True)
-        self.inp = nn.Conv2d(1, d_model, 3, padding=1)
+        # 只沿时间轴（最后一维 L）卷积。输入布局是 [B,C,N,L]；用 3×3 会在
+        # 站轴（文件顺序）上做随机邻居平滑，绕开图邻接且不可解释。
+        self.inp = nn.Conv2d(1, d_model, (1, 3), padding=(0, 1))
         self.blocks = nn.ModuleList([
             _STBlock(d_model, temb, 2 ** (i % 4), dropout)
             for i in range(n_layers)])
         self.out_norm = nn.GroupNorm(8, d_model)
-        self.out = nn.Conv2d(d_model, 1, 3, padding=1)
+        self.out = nn.Conv2d(d_model, 1, (1, 3), padding=(0, 1))
         nn.init.zeros_(self.out.weight)
         nn.init.zeros_(self.out.bias)
 

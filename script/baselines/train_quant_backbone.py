@@ -6,7 +6,8 @@
     python3 script/baselines/train_quant_backbone.py \
         --method itransformer --city MEL --seed 0 --device 0
 
-方法：``itransformer`` / ``stgcn`` / ``stgcn_nograph`` / ``gwnet`` / ``mqcnn``。
+方法：``itransformer`` / ``stgcn`` / ``stgcn_nograph`` / ``gwnet`` / ``mqcnn`` /
+``tsmixer``。
 
 协议（所有方法共用）：
 * 窗 ``seq_l=72, pre_len=72``，训练/验证均按 clean mask 加权；
@@ -35,8 +36,10 @@ from api.model.quant_backbones import (  # noqa: E402
 )
 from api.model.quant_head import pinball_loss  # noqa: E402
 from api.model.mqcnn_quant import MQCNNQuant  # noqa: E402
+from api.model.tsmixer_quant import TSMixerQuant  # noqa: E402
 
-METHODS = ("itransformer", "stgcn", "stgcn_nograph", "gwnet", "mqcnn")
+METHODS = ("itransformer", "stgcn", "stgcn_nograph", "gwnet", "mqcnn",
+           "tsmixer")
 
 
 def build_model(args, N, n_quant, adj):
@@ -59,6 +62,10 @@ def build_model(args, N, n_quant, adj):
     if args.method == "mqcnn":
         return MQCNNQuant(N, C.SEQ_L, C.PRE_LEN, n_quant,
                           d_model=args.d_model, dropout=args.dropout)
+    if args.method == "tsmixer":
+        return TSMixerQuant(N, C.SEQ_L, C.PRE_LEN, n_quant,
+                            d_model=args.d_model, n_layers=args.layers,
+                            d_ff=args.d_ff, dropout=args.dropout)
     raise ValueError(args.method)
 
 
@@ -142,7 +149,9 @@ def main():
     adj = None
     if args.method in ("stgcn", "stgcn_nograph", "gwnet"):
         dist = C.load_distance(args.city, ds)
-        adj = knn_adjacency(torch.from_numpy(dist), k=args.knn).numpy()
+        # 自环由 STGCN/GWNet 的 normalize_adj 统一加一次，这里不能再加。
+        adj = knn_adjacency(torch.from_numpy(dist), k=args.knn,
+                            self_loop=False).numpy()
         if args.method == "stgcn_nograph":
             adj = None
 
